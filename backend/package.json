@@ -1,0 +1,14 @@
+{
+  "name": "localdrop-backend",
+  "version": "1.0.0",
+  "description": "LocalDrop – Socket.IO signaling server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev":   "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  }
+}

@@ -1,22 +1,11 @@
 {
-  "name": "local-drop",
+  "name": "localdrop",
   "version": "1.0.0",
-  "description": "Peer-to-peer local network file sharing via WebRTC + Socket.IO",
-  "main": "index.js",
+  "description": "P2P local network file sharing",
   "scripts": {
-    "start": "node server.js",
-    "dev": "concurrently \"node server.js\" \"npm run dev --prefix client\"",
-    "dev:server": "node server.js",
-    "dev:client": "npm run dev --prefix client",
-    "build": "npm run build --prefix client"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "express": "^5.2.1",
-    "socket.io": "^4.8.3"
+    "dev":   "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run start --prefix backend"
   },
   "devDependencies": {
     "concurrently": "^10.0.5"

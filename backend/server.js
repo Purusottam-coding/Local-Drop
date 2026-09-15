@@ -28,16 +28,14 @@ const io     = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 /* ── Static frontend (production) ──────────────────────────── */
-// In development: React runs on Vite dev server (port 5173),
-//                 which proxies /socket.io → this server (port 3000).
-// In production:  run `npm run build` → serves client/dist here.
-const DIST = path.join(__dirname, 'client', 'dist');
+// DEV:  Vite runs on port 5173, proxies /socket.io → here (port 3000)
+// PROD: run `npm run build` from root, then `npm start` here
+const DIST = path.join(__dirname, '..', 'frontend', 'dist');
 app.use(express.static(DIST));
-// SPA fallback – return index.html for any non-API route
-app.get('*', (_req, res) => {
+app.get('/{*path}', (_req, res) => {
   const index = path.join(DIST, 'index.html');
   res.sendFile(index, (err) => {
-    if (err) res.status(200).send('LocalDrop API server running. Open http://localhost:5173 in dev mode.');
+    if (err) res.status(200).send('Backend running. Open http://localhost:5173 in dev mode.');
   });
 });
 
