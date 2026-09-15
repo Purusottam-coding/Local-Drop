@@ -1,13 +1,6 @@
 {
   "name": "localdrop",
-  "version": "1.0.0",
-  "description": "P2P local network file sharing",
   "scripts": {
-    "dev":   "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
-    "build": "npm run build --prefix frontend",
-    "start": "npm run start --prefix backend"
-  },
-  "devDependencies": {
-    "concurrently": "^10.0.5"
+    "dev": "npx concurrently \"cd backend && node server.js\" \"cd frontend && npm run dev\""
   }
 }
