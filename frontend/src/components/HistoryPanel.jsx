@@ -24,7 +24,10 @@ export default function HistoryPanel({ history, onClear }) {
           history.map((item, i) => (
             <li key={i} className="history-item">
               <div className="history-row">
-                <span className="history-name" title={item.name}>{item.name}</span>
+                <span className="history-name" title={item.name}>
+                  {item.name}
+                  {item.fileCount > 1 && ` +${item.fileCount - 1} more`}
+                </span>
                 <span className={`badge ${item.direction}`}>{item.direction}</span>
               </div>
               <div className="history-meta">
