@@ -1,26 +1,28 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { useSocket } from '../context/SocketContext'
 import { useToast } from '../context/ToastContext'
 import DropZone from './DropZone'
 import FileQueue from './FileQueue'
 import TransferProgress from './TransferProgress'
 
-// The three states the transfer panel can be in
 const STATE = {
-  IDLE:        'idle',        // showing drop zone
-  WAITING:     'waiting',     // request sent, waiting for acceptance
-  TRANSFERRING:'transferring' // files are being transferred
+  IDLE:         'idle',         // showing drop zone
+  WAITING:      'waiting',      // request sent, waiting for acceptance
+  TRANSFERRING: 'transferring', // files are being transferred
 }
 
 export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone }) {
   const { socket } = useSocket()
   const { showToast } = useToast()
 
-  const [state, setState]           = useState(STATE.IDLE)
+  const [state,       setState]       = useState(STATE.IDLE)
   const [queuedFiles, setQueuedFiles] = useState([])
   const [activeFiles, setActiveFiles] = useState([])
 
-  // Add files to queue, skip duplicates
+  // Keep track of the current transferId so we can emit transfer:complete later
+  const transferIdRef = useRef(null)
+
+  // Add files, skip duplicates
   function addFiles(incoming) {
     setQueuedFiles(prev => {
       const unique = incoming.filter(
@@ -47,29 +49,40 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone }
     setState(STATE.WAITING)
     showToast(`Waiting for ${selectedPeer.name} to accept…`, 'info')
 
-    // Auto-cancel waiting after 15 seconds
+    // Auto-cancel waiting after 15 seconds if no response
     setTimeout(() => {
       setState(prev => prev === STATE.WAITING ? STATE.IDLE : prev)
     }, 15000)
   }
 
-  // Called by App when the peer accepted our request
-  const startTransfer = useCallback(() => {
+  // Called by App.jsx when peer accepted — receives the transferId from server
+  const startTransfer = useCallback((transferId) => {
+    transferIdRef.current = transferId
     setActiveFiles(queuedFiles.map(f => ({ name: f.name, size: f.size })))
     setQueuedFiles([])
     setState(STATE.TRANSFERRING)
   }, [queuedFiles])
 
-  // Store startTransfer so App can call it
+  // Expose so App.jsx can call it after receiving transfer:accepted
   TransferPanel._startTransfer = startTransfer
 
-  // Called when each file finishes
+  // Called when a single file finishes (by TransferProgress)
   function handleFileDone(fileInfo) {
     onFileDone?.({ ...fileInfo, direction: 'sent', peer: selectedPeer?.name })
     showToast(`Sent: ${fileInfo.name}`, 'success')
   }
 
-  // No device selected yet
+  // Called when ALL files are done (by TransferProgress)
+  function handleAllDone() {
+    if (transferIdRef.current) {
+      // Tell the backend this transfer is complete so it can save the record
+      socket.emit('transfer:complete', { transferId: transferIdRef.current })
+      transferIdRef.current = null
+    }
+    setState(STATE.IDLE)
+  }
+
+  // No device selected yet — show placeholder
   if (!selectedPeer) {
     return (
       <div className="panel panel-center">
@@ -89,7 +102,8 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone }
   return (
     <div className="panel panel-center">
       <div className="transfer-body">
-        {/* Top bar showing target device */}
+
+        {/* Target device bar */}
         <div className="target-bar">
           <div className="avatar">{selectedPeer.name[0].toUpperCase()}</div>
           <div>
@@ -100,17 +114,14 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone }
               {state === STATE.IDLE         && 'Ready'}
             </div>
           </div>
-          <button
-            className="btn btn-outline"
-            style={{ marginLeft: 'auto' }}
-            onClick={onDisconnect}
-          >
+          <button className="btn btn-outline" style={{ marginLeft: 'auto' }} onClick={onDisconnect}>
             Disconnect
           </button>
         </div>
 
         <div className="transfer-content">
-          {/* IDLE: show drop zone and file queue */}
+
+          {/* IDLE: drop zone + file queue */}
           {state === STATE.IDLE && (
             <>
               <DropZone onFiles={addFiles} />
@@ -128,16 +139,19 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone }
             <div className="waiting">
               <div className="waiting-spinner" />
               <p>Waiting for {selectedPeer.name} to accept the transfer…</p>
-              <button className="btn-ghost" onClick={() => setState(STATE.IDLE)}>
-                Cancel
-              </button>
+              <button className="btn-ghost" onClick={() => setState(STATE.IDLE)}>Cancel</button>
             </div>
           )}
 
           {/* TRANSFERRING: progress bars */}
           {state === STATE.TRANSFERRING && (
-            <TransferProgress files={activeFiles} onFileDone={handleFileDone} />
+            <TransferProgress
+              files={activeFiles}
+              onFileDone={handleFileDone}
+              onAllDone={handleAllDone}
+            />
           )}
+
         </div>
       </div>
     </div>

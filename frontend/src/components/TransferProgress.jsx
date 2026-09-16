@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 
-export default function TransferProgress({ files, onFileDone }) {
+export default function TransferProgress({ files, onFileDone, onAllDone }) {
   const [items, setItems] = useState([])
-  const timers = useRef([])
+  const timers         = useRef([])
+  const completedCount = useRef(0)   // track completions without re-render
 
   useEffect(() => {
     // Clear any running timers from previous transfer
     timers.current.forEach(clearInterval)
     timers.current = []
+    completedCount.current = 0
 
     const initial = files.map(f => ({
       name: f.name,
@@ -37,6 +39,12 @@ export default function TransferProgress({ files, onFileDone }) {
             item.done = true
             clearInterval(interval)
             onFileDone?.({ name: item.name, size: item.size })
+
+            // Check if all files are now done
+            completedCount.current += 1
+            if (completedCount.current === files.length) {
+              onAllDone?.()
+            }
           }
 
           next[index] = item
