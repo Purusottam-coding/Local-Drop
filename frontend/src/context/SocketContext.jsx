@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { io } from 'socket.io-client'
 import { deviceApi } from '../services/api'
+import { WebRTCManager } from '../services/webrtcService'
 
 const SocketContext = createContext(null)
 
@@ -38,6 +39,7 @@ function getStoredDeviceName(type) {
 
 export function SocketProvider({ children }) {
   const [socket, setSocket] = useState(null)
+  const [webrtcManager, setWebrtcManager] = useState(null)
   const [connected, setConnected] = useState(false)
   const [myDevice, setMyDevice] = useState(() => {
     const type = detectDeviceType()
@@ -50,6 +52,8 @@ export function SocketProvider({ children }) {
   useEffect(() => {
     const s = io('/', { transports: ['websocket', 'polling'] })
     setSocket(s)
+    const rtc = new WebRTCManager(s)
+    setWebrtcManager(rtc)
 
     s.on('connect', () => {
       setConnected(true)
@@ -100,7 +104,10 @@ export function SocketProvider({ children }) {
       setPeers((prev) => prev.filter((p) => p.deviceId !== deviceId && p.id !== id))
     })
 
-    return () => s.disconnect()
+    return () => {
+      rtc.cleanup()
+      s.disconnect()
+    }
   }, [])
 
   // Function to rename device and sync with MongoDB & Socket
@@ -138,6 +145,7 @@ export function SocketProvider({ children }) {
     <SocketContext.Provider
       value={{
         socket,
+        webrtcManager,
         connected,
         myDevice,
         peers,
