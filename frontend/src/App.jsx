@@ -7,6 +7,7 @@ import DevicePanel from './components/DevicePanel'
 import TransferPanel from './components/TransferPanel'
 import HistoryPanel from './components/HistoryPanel'
 import IncomingModal from './components/IncomingModal'
+import IncomingTextModal from './components/IncomingTextModal'
 import TransferProgress from './components/TransferProgress'
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
 
   const [selectedPeer, setSelectedPeer] = useState(null)
   const [incomingRequest, setIncomingRequest] = useState(null)
+  const [incomingText, setIncomingText] = useState(null)
   const [receiving, setReceiving] = useState(null)
   const [history, setHistory] = useState([])
 
@@ -63,10 +65,27 @@ export default function App() {
       showToast(`${by?.name || 'Peer'} declined: ${reason || 'Transfer rejected'}`, 'error')
     })
 
+    // Received text or clipboard message from a peer
+    socket.on('text:receive', (data) => {
+      setIncomingText(data)
+      showToast(`Incoming text from ${data.from?.name || 'Peer'}!`, 'info')
+      setHistory((prev) => [
+        {
+          name: `Text: "${data.text.slice(0, 24)}${data.text.length > 24 ? '…' : ''}"`,
+          size: new Blob([data.text]).size,
+          direction: 'received',
+          peer: data.from?.name || 'Peer',
+          ts: Date.now(),
+        },
+        ...prev,
+      ])
+    })
+
     return () => {
       socket.off('transfer:request')
       socket.off('transfer:accepted')
       socket.off('transfer:rejected')
+      socket.off('text:receive')
     }
   }, [socket, showToast])
 
@@ -212,6 +231,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Incoming text message modal with 1-click clipboard copy */}
+      <IncomingTextModal
+        textData={incomingText}
+        onClose={() => setIncomingText(null)}
+      />
     </>
   )
 }

@@ -301,6 +301,29 @@ function setupSocketIO(io) {
       }
     });
 
+    // 5. Instant Text & Clipboard Sharing
+    socket.on("text:send", async ({ targetSocketId, targetDeviceId, to, text }) => {
+      try {
+        const recipient = targetSocketId || to;
+        const sender = await Device.findOne({ socketId: socket.id });
+
+        if (recipient && text) {
+          io.to(recipient).emit("text:receive", {
+            from: {
+              socketId: socket.id,
+              name: sender ? sender.name : "Device",
+              deviceId: currentDeviceId,
+            },
+            text,
+            timestamp: new Date().toISOString(),
+          });
+          console.log(`[Text Sent] from ${sender?.name || socket.id} to ${recipient}`);
+        }
+      } catch (err) {
+        console.error("Error relaying text:", err);
+      }
+    });
+
     // 5. Disconnect handling
     socket.on("disconnect", async () => {
       console.log(`[Socket Disconnected] ID: ${socket.id}`);

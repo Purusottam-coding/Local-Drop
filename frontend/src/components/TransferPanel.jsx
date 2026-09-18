@@ -4,6 +4,7 @@ import { useToast } from '../context/ToastContext'
 import DropZone from './DropZone'
 import FileQueue from './FileQueue'
 import TransferProgress from './TransferProgress'
+import TextSharePanel from './TextSharePanel'
 
 const STATE = {
   IDLE: 'idle',
@@ -15,6 +16,7 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone, 
   const { socket, webrtcManager } = useSocket()
   const { showToast } = useToast()
 
+  const [activeTab, setActiveTab] = useState('files') // 'files' | 'text'
   const [state, setState] = useState(STATE.IDLE)
   const [queuedFiles, setQueuedFiles] = useState([])
   const [progressItems, setProgressItems] = useState([])
@@ -187,37 +189,82 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone, 
           </button>
         </div>
 
+        {/* Tab Switcher: Files vs Text/Clipboard */}
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--gray-200)', background: 'var(--white)', padding: '0 16px' }}>
+          <button
+            type="button"
+            style={{
+              padding: '10px 16px',
+              border: 'none',
+              borderBottom: activeTab === 'files' ? '2px solid var(--blue)' : '2px solid transparent',
+              background: 'none',
+              color: activeTab === 'files' ? 'var(--blue)' : 'var(--gray-500)',
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+            onClick={() => setActiveTab('files')}
+          >
+            📁 Files
+          </button>
+          <button
+            type="button"
+            style={{
+              padding: '10px 16px',
+              border: 'none',
+              borderBottom: activeTab === 'text' ? '2px solid var(--blue)' : '2px solid transparent',
+              background: 'none',
+              color: activeTab === 'text' ? 'var(--blue)' : 'var(--gray-500)',
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+            onClick={() => setActiveTab('text')}
+          >
+            📋 Text & Clipboard
+          </button>
+        </div>
+
         <div className="transfer-content">
-          {/* IDLE: drop zone and file queue */}
-          {state === STATE.IDLE && (
-            <>
-              <DropZone onFiles={addFiles} />
-              <FileQueue
-                files={queuedFiles}
-                onRemove={removeFile}
-                onClear={clearFiles}
-                onSend={sendRequest}
-              />
-            </>
-          )}
-
-          {/* WAITING: acceptance spinner */}
-          {state === STATE.WAITING && (
-            <div className="waiting">
-              <div className="waiting-spinner" />
-              <p>Waiting for {selectedPeer.name} to accept the transfer…</p>
-              <button className="btn-ghost" onClick={() => setState(STATE.IDLE)}>
-                Cancel
-              </button>
-            </div>
-          )}
-
-          {/* TRANSFERRING: real WebRTC progress */}
-          {state === STATE.TRANSFERRING && (
-            <TransferProgress
-              progressItems={progressItems}
-              title="Sending Files via WebRTC"
+          {activeTab === 'text' ? (
+            <TextSharePanel
+              selectedPeer={selectedPeer}
+              onTextSent={onFileDone}
             />
+          ) : (
+            <>
+              {/* IDLE: drop zone and file queue */}
+              {state === STATE.IDLE && (
+                <>
+                  <DropZone onFiles={addFiles} />
+                  <FileQueue
+                    files={queuedFiles}
+                    onRemove={removeFile}
+                    onClear={clearFiles}
+                    onSend={sendRequest}
+                  />
+                </>
+              )}
+
+              {/* WAITING: acceptance spinner */}
+              {state === STATE.WAITING && (
+                <div className="waiting">
+                  <div className="waiting-spinner" />
+                  <p>Waiting for {selectedPeer.name} to accept the transfer…</p>
+                  <button className="btn-ghost" onClick={() => setState(STATE.IDLE)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
+
+              {/* TRANSFERRING: real WebRTC progress */}
+              {state === STATE.TRANSFERRING && (
+                <TransferProgress
+                  progressItems={progressItems}
+                  title="Sending Files via WebRTC"
+                />
+              )}
+            </>
           )}
         </div>
       </div>
