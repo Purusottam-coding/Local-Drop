@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSocket } from './context/SocketContext'
 import { useToast } from './context/ToastContext'
+import { transferApi } from './services/api'
 import Navbar from './components/Navbar'
 import DevicePanel from './components/DevicePanel'
 import TransferPanel from './components/TransferPanel'
@@ -15,24 +16,26 @@ export default function App() {
   const [incomingRequest, setIncomingRequest] = useState(null)
   const [history,         setHistory]         = useState([])
 
-  // Load transfer history from backend when app starts
+  // Load transfer history from MongoDB via transferApi service
   useEffect(() => {
-    fetch('/api/transfers')
-      .then(res => res.json())
-      .then(data => {
-        // Convert backend records to the shape HistoryPanel expects
-        const entries = data.map(t => ({
-          name:      t.files[0]?.name || 'Unknown',   // show first file name
+    transferApi
+      .getTransfers()
+      .then((res) => {
+        const records = res.data || []
+        const entries = records.map((t) => ({
+          name:      t.files[0]?.name || 'Unknown',
           size:      t.files[0]?.size || 0,
-          direction: 'sent',                           // server-side records are sent transfers
+          direction: 'sent',
           peer:      t.receiver?.name || '–',
-          ts:        new Date(t.requestedAt).getTime(),
+          ts:        new Date(t.requestedAt || t.createdAt).getTime(),
           status:    t.status,
-          fileCount: t.files.length,
+          fileCount: t.files ? t.files.length : 1,
         }))
         setHistory(entries)
       })
-      .catch(() => {})  // silently ignore if backend is unreachable
+      .catch((err) => {
+        console.warn('Could not load history from API:', err.message)
+      })
   }, [])
 
   // Listen for socket events related to transfer handshake
@@ -94,6 +97,16 @@ export default function App() {
     setHistory(prev => [entry, ...prev])
   }
 
+  const handleClearHistory = async () => {
+    try {
+      await transferApi.clearTransfers()
+      setHistory([])
+      showToast('History cleared from database', 'info')
+    } catch {
+      setHistory([])
+    }
+  }
+
   return (
     <>
       <Navbar />
@@ -107,7 +120,7 @@ export default function App() {
           onFileDone={addToHistory}
         />
 
-        <HistoryPanel history={history} onClear={() => setHistory([])} />
+        <HistoryPanel history={history} onClear={handleClearHistory} />
       </main>
 
       <IncomingModal

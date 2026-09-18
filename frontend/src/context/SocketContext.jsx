@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { io } from 'socket.io-client'
+import { deviceApi } from '../services/api'
 
 const SocketContext = createContext(null)
 
@@ -113,13 +114,9 @@ export function SocketProvider({ children }) {
     const deviceId = getStoredDeviceId()
     const type = detectDeviceType()
 
-    // 1. Update backend via REST API
+    // 1. Update backend via REST API service
     try {
-      await fetch(`/api/devices/${deviceId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed }),
-      })
+      await deviceApi.updateDevice(deviceId, { name: trimmed })
     } catch (e) {
       console.error('Failed to update device name in database:', e)
     }
