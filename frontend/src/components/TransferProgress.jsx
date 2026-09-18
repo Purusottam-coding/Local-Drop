@@ -1,78 +1,33 @@
-import { useEffect, useRef, useState } from 'react'
+import { formatBytes } from '../utils/helpers'
 
-export default function TransferProgress({ files, onFileDone, onAllDone }) {
-  const [items, setItems] = useState([])
-  const timers         = useRef([])
-  const completedCount = useRef(0)   // track completions without re-render
+export default function TransferProgress({ progressItems = [], title = 'Transfer in Progress' }) {
+  if (!progressItems || progressItems.length === 0) return null
 
-  useEffect(() => {
-    // Clear any running timers from previous transfer
-    timers.current.forEach(clearInterval)
-    timers.current = []
-    completedCount.current = 0
-
-    const initial = files.map(f => ({
-      name: f.name,
-      size: f.size || 0,
-      pct: 0,
-      speed: '',
-      done: false,
-    }))
-
-    setItems(initial)
-
-    // Simulate progress for each file
-    initial.forEach((_, index) => {
-      const totalDuration = 2000 + Math.random() * 3000 // 2 – 5 seconds
-      const tickMs = 80
-      const increment = 100 / (totalDuration / tickMs)
-
-      const interval = setInterval(() => {
-        setItems(prev => {
-          const next = [...prev]
-          const item = { ...next[index] }
-
-          item.pct = Math.min(100, item.pct + increment + Math.random() * increment * 0.5)
-          item.speed = `${(Math.random() * 4 + 1).toFixed(1)} MB/s`
-
-          if (item.pct >= 100) {
-            item.done = true
-            clearInterval(interval)
-            onFileDone?.({ name: item.name, size: item.size })
-
-            // Check if all files are now done
-            completedCount.current += 1
-            if (completedCount.current === files.length) {
-              onAllDone?.()
-            }
-          }
-
-          next[index] = item
-          return next
-        })
-      }, tickMs)
-
-      timers.current.push(interval)
-    })
-
-    return () => timers.current.forEach(clearInterval)
-  }, [files])
-
-  if (items.length === 0) return null
-
-  const doneCount = items.filter(i => i.done).length
+  const doneCount = progressItems.filter((i) => i.done).length
 
   return (
     <div className="progress-section">
-      <h4>Transferring — {doneCount} of {items.length} done</h4>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h4>{title}</h4>
+        <span style={{ fontSize: '12px', color: 'var(--gray-500)', fontWeight: 500 }}>
+          {doneCount} of {progressItems.length} completed
+        </span>
+      </div>
 
-      {items.map((item, i) => {
-        const pct = Math.round(item.pct)
+      {progressItems.map((item, i) => {
+        const pct = Math.min(100, Math.max(0, Math.round(item.pct || 0)))
         return (
           <div key={i} className="progress-item">
             <div className="progress-row">
-              <span className="progress-name">{item.name}</span>
-              <span className="progress-pct">
+              <span className="progress-name" title={item.name}>
+                {item.name}
+                {item.size ? (
+                  <span style={{ fontSize: '11px', color: 'var(--gray-400)', marginLeft: '6px' }}>
+                    ({formatBytes(item.size)})
+                  </span>
+                ) : null}
+              </span>
+              <span className="progress-pct" style={{ color: item.done ? 'var(--green)' : 'var(--blue)' }}>
                 {item.done ? '✓ Done' : `${pct}%`}
               </span>
             </div>
@@ -80,15 +35,18 @@ export default function TransferProgress({ files, onFileDone, onAllDone }) {
             <div className="progress-track">
               <div
                 className={`progress-fill ${item.done ? 'done' : ''}`}
-                style={{ width: `${pct}%` }}
+                style={{ width: `${pct}%`, transition: 'width 0.15s ease' }}
               />
             </div>
 
-            {!item.done && (
-              <div className="progress-meta">
-                <span>{item.speed}</span>
-              </div>
-            )}
+            <div className="progress-meta">
+              <span>{item.done ? 'Completed' : item.speed || 'Streaming...'}</span>
+              {item.transferred && item.size ? (
+                <span style={{ marginLeft: 'auto' }}>
+                  {formatBytes(item.transferred)} / {formatBytes(item.size)}
+                </span>
+              ) : null}
+            </div>
           </div>
         )
       })}

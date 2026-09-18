@@ -37,6 +37,17 @@ function setupSocketIO(io) {
           { new: true, upsert: true }
         );
 
+        const formatPeer = (d) => ({
+          id: d.socketId,
+          deviceId: d.deviceId,
+          name: d.name,
+          type: d.type,
+          ip: d.ip,
+          socketId: d.socketId,
+          lastSeen: d.lastSeen,
+          isTrusted: d.isTrusted,
+        });
+
         // Acknowledge back to the current device
         socket.emit("device:registered", {
           deviceId: device.deviceId,
@@ -45,16 +56,12 @@ function setupSocketIO(io) {
           ip: device.ip,
           isTrusted: device.isTrusted,
         });
+        socket.emit("device:info", { name: device.name, ip: device.ip, deviceId: device.deviceId });
 
         // Broadcast to everyone else that this device is online
-        socket.broadcast.emit("device:online", {
-          deviceId: device.deviceId,
-          name: device.name,
-          type: device.type,
-          ip: device.ip,
-          socketId: socket.id,
-          lastSeen: device.lastSeen,
-        });
+        const peerPayload = formatPeer(device);
+        socket.broadcast.emit("device:online", peerPayload);
+        socket.broadcast.emit("peer:joined", peerPayload);
 
         // Send list of currently online devices to this socket
         const onlineDevices = await Device.find({
@@ -62,7 +69,9 @@ function setupSocketIO(io) {
           deviceId: { $ne: deviceId },
         }).select("deviceId name type ip socketId lastSeen isTrusted");
 
-        socket.emit("devices:list", onlineDevices);
+        const formattedList = onlineDevices.map(formatPeer);
+        socket.emit("devices:list", formattedList);
+        socket.emit("peers:list", formattedList);
 
         console.log(`[Device Registered] ${device.name} (${device.deviceId})`);
       } catch (err) {
@@ -71,47 +80,68 @@ function setupSocketIO(io) {
       }
     });
 
-    // 2. Request active peer list
-    socket.on("devices:refresh", async () => {
+    // 2. Request active peer list (supports both devices:refresh and peers:scan)
+    const sendPeerList = async () => {
       try {
         const onlineDevices = await Device.find({
           isOnline: true,
           deviceId: { $ne: currentDeviceId },
         }).select("deviceId name type ip socketId lastSeen isTrusted");
 
-        socket.emit("devices:list", onlineDevices);
+        const formatted = onlineDevices.map((d) => ({
+          id: d.socketId,
+          deviceId: d.deviceId,
+          name: d.name,
+          type: d.type,
+          ip: d.ip,
+          socketId: d.socketId,
+          lastSeen: d.lastSeen,
+          isTrusted: d.isTrusted,
+        }));
+
+        socket.emit("devices:list", formatted);
+        socket.emit("peers:list", formatted);
       } catch (err) {
         console.error("Error refreshing devices:", err);
       }
-    });
+    };
+
+    socket.on("devices:refresh", sendPeerList);
+    socket.on("peers:scan", sendPeerList);
 
     // 3. WebRTC Signaling Relays
-    socket.on("webrtc:offer", ({ targetSocketId, targetDeviceId, offer }) => {
-      if (targetSocketId) {
-        io.to(targetSocketId).emit("webrtc:offer", {
+    socket.on("webrtc:offer", ({ targetSocketId, to, offer, transferId }) => {
+      const recipient = targetSocketId || to;
+      if (recipient) {
+        io.to(recipient).emit("webrtc:offer", {
           fromSocketId: socket.id,
           fromDeviceId: currentDeviceId,
           offer,
+          transferId,
         });
       }
     });
 
-    socket.on("webrtc:answer", ({ targetSocketId, targetDeviceId, answer }) => {
-      if (targetSocketId) {
-        io.to(targetSocketId).emit("webrtc:answer", {
+    socket.on("webrtc:answer", ({ targetSocketId, to, answer, transferId }) => {
+      const recipient = targetSocketId || to;
+      if (recipient) {
+        io.to(recipient).emit("webrtc:answer", {
           fromSocketId: socket.id,
           fromDeviceId: currentDeviceId,
           answer,
+          transferId,
         });
       }
     });
 
-    socket.on("webrtc:ice-candidate", ({ targetSocketId, candidate }) => {
-      if (targetSocketId) {
-        io.to(targetSocketId).emit("webrtc:ice-candidate", {
+    socket.on("webrtc:ice-candidate", ({ targetSocketId, to, candidate, transferId }) => {
+      const recipient = targetSocketId || to;
+      if (recipient) {
+        io.to(recipient).emit("webrtc:ice-candidate", {
           fromSocketId: socket.id,
           fromDeviceId: currentDeviceId,
           candidate,
+          transferId,
         });
       }
     });
@@ -119,69 +149,89 @@ function setupSocketIO(io) {
     // 4. File Transfer Requests and Handshake
     socket.on("transfer:request", async (data) => {
       try {
-        const { targetDeviceId, targetSocketId, files } = data;
+        const targetSocketId = data.targetSocketId || data.to;
+        const targetDeviceId = data.targetDeviceId;
+        const files = data.files || [];
+
         const sender = await Device.findOne({ socketId: socket.id });
         const receiver = await Device.findOne({
-          $or: [{ socketId: targetSocketId }, { deviceId: targetDeviceId }],
+          $or: [
+            { socketId: targetSocketId },
+            ...(targetDeviceId ? [{ deviceId: targetDeviceId }] : []),
+          ],
         });
 
-        if (!receiver) {
+        if (!receiver && !targetSocketId) {
           return socket.emit("transfer:error", { message: "Target device not found or offline" });
         }
 
-        const transferId = uuidv4();
-        const totalSize = (files || []).reduce((acc, f) => acc + (f.size || 0), 0);
+        const receiverSocketId = receiver ? receiver.socketId : targetSocketId;
+        const transferId = data.transferId || uuidv4();
+        const totalSize = files.reduce((acc, f) => acc + (f.size || 0), 0);
 
         // Record in MongoDB
-        const transfer = await Transfer.create({
+        await Transfer.create({
           transferId,
           sender: {
-            deviceId: sender ? sender.deviceId : currentDeviceId,
-            name: sender ? sender.name : "Unknown Sender",
+            deviceId: sender ? sender.deviceId : currentDeviceId || "sender",
+            name: sender ? sender.name : "Sender",
             ip: clientIp,
           },
           receiver: {
-            deviceId: receiver.deviceId,
-            name: receiver.name,
-            ip: receiver.ip,
+            deviceId: receiver ? receiver.deviceId : "receiver",
+            name: receiver ? receiver.name : "Receiver",
+            ip: receiver ? receiver.ip : clientIp,
           },
-          files: files || [],
+          files,
           totalSize,
           status: "pending",
         });
 
-        // Notify target device
-        io.to(receiver.socketId).emit("transfer:incoming", {
+        const payload = {
           transferId,
           from: {
             deviceId: sender ? sender.deviceId : currentDeviceId,
-            name: sender ? sender.name : "Unknown Sender",
+            name: sender ? sender.name : "Unknown Device",
             socketId: socket.id,
+            id: socket.id,
           },
           files,
           totalSize,
-        });
+        };
+
+        // Notify target device (supports both transfer:incoming and transfer:request)
+        io.to(receiverSocketId).emit("transfer:incoming", payload);
+        io.to(receiverSocketId).emit("transfer:request", payload);
 
         // Confirm to sender that request was sent
         socket.emit("transfer:sent", { transferId, status: "pending" });
-        console.log(`[Transfer Request] ${transferId} from ${sender?.name} to ${receiver?.name}`);
+        console.log(`[Transfer Request] ${transferId} to socket ${receiverSocketId}`);
       } catch (err) {
         console.error("Error creating transfer request:", err);
         socket.emit("transfer:error", { message: "Failed to initiate transfer request" });
       }
     });
 
-    socket.on("transfer:accept", async ({ transferId, senderSocketId }) => {
+    socket.on("transfer:accept", async (payload = {}) => {
       try {
+        const { transferId } = payload;
+        const senderSocketId = payload.senderSocketId || payload.from;
+
         await Transfer.findOneAndUpdate(
           { transferId },
           { status: "accepted", respondedAt: new Date() }
         );
 
+        const receiverDevice = await Device.findOne({ socketId: socket.id });
+
         if (senderSocketId) {
           io.to(senderSocketId).emit("transfer:accepted", {
             transferId,
             receiverSocketId: socket.id,
+            by: {
+              socketId: socket.id,
+              name: receiverDevice ? receiverDevice.name : "Receiver",
+            },
           });
         }
         console.log(`[Transfer Accepted] ${transferId}`);
@@ -190,8 +240,11 @@ function setupSocketIO(io) {
       }
     });
 
-    socket.on("transfer:reject", async ({ transferId, senderSocketId, reason }) => {
+    socket.on("transfer:reject", async (payload = {}) => {
       try {
+        const { transferId, reason } = payload;
+        const senderSocketId = payload.senderSocketId || payload.from;
+
         await Transfer.findOneAndUpdate(
           { transferId },
           {
@@ -202,10 +255,16 @@ function setupSocketIO(io) {
           }
         );
 
+        const receiverDevice = await Device.findOne({ socketId: socket.id });
+
         if (senderSocketId) {
           io.to(senderSocketId).emit("transfer:rejected", {
             transferId,
             reason: reason || "Transfer declined",
+            by: {
+              socketId: socket.id,
+              name: receiverDevice ? receiverDevice.name : "Receiver",
+            },
           });
         }
         console.log(`[Transfer Rejected] ${transferId}`);
@@ -254,7 +313,9 @@ function setupSocketIO(io) {
           );
 
           if (device) {
-            io.emit("device:offline", { deviceId: device.deviceId, name: device.name });
+            const offlinePayload = { deviceId: device.deviceId, name: device.name, id: socket.id };
+            io.emit("device:offline", offlinePayload);
+            io.emit("peer:left", offlinePayload);
             console.log(`[Device Offline] ${device.name}`);
           }
         } else {
@@ -266,7 +327,9 @@ function setupSocketIO(io) {
           );
 
           if (device) {
-            io.emit("device:offline", { deviceId: device.deviceId, name: device.name });
+            const offlinePayload = { deviceId: device.deviceId, name: device.name, id: socket.id };
+            io.emit("device:offline", offlinePayload);
+            io.emit("peer:left", offlinePayload);
             console.log(`[Device Offline] ${device.name}`);
           }
         }
