@@ -11,7 +11,7 @@ import IncomingModal from './components/IncomingModal'
 import IncomingTextModal from './components/IncomingTextModal'
 import PairingModal from './components/PairingModal'
 import QRCodeModal from './components/QRCodeModal'
-import TransferProgress from './components/TransferProgress'
+import ReceivedFilesModal from './components/ReceivedFilesModal'
 
 export default function App() {
   const { socket, peers, myDevice, webrtcManager, connected } = useSocket()
@@ -99,6 +99,8 @@ export default function App() {
         fromName: from.name,
         files,
         transferId,
+        isFinished: false,
+        receivedFiles: [],
         progressItems: files.map((f) => ({
           name: f.name,
           size: f.size,
@@ -258,18 +260,24 @@ export default function App() {
       }
     })
 
-    const unsubFileComplete = webrtcManager.on('fileComplete', ({ fileName, isSender }) => {
+    const unsubFileComplete = webrtcManager.on('fileComplete', ({ fileName, size, blob, isSender }) => {
       if (!isSender) {
-        showToast(`Downloaded: ${fileName}`, 'success')
+        showToast(`Received: ${fileName}`, 'info')
         loadHistory()
         setReceiving((prev) => {
           if (!prev) return prev
-          const next = prev.progressItems.map((item) =>
+          const nextItems = (prev.progressItems || []).map((item) =>
             item.name === fileName
-              ? { ...item, pct: 100, done: true, speed: '✓ Saved' }
+              ? { ...item, pct: 100, done: true, speed: '✓ Received' }
               : item
           )
-          return { ...prev, progressItems: next }
+          const newFile = { name: fileName, size, blob }
+          const remaining = (prev.receivedFiles || []).filter((f) => f.name !== fileName)
+          return {
+            ...prev,
+            receivedFiles: [...remaining, newFile],
+            progressItems: nextItems,
+          }
         })
       }
     })
@@ -277,12 +285,9 @@ export default function App() {
     const unsubAllComplete = webrtcManager.on('allComplete', ({ isSender }) => {
       if (!isSender) {
         playChime('success')
-        showToast('All files received and saved!', 'success')
+        showToast('All files received! Ready to download.', 'success')
         loadHistory()
-        // Automatically close the receiving overlay after a brief delay
-        setTimeout(() => {
-          setReceiving(null)
-        }, 1200)
+        setReceiving((prev) => (prev ? { ...prev, isFinished: true } : null))
       }
     })
 
@@ -463,42 +468,11 @@ export default function App() {
         onReject={rejectIncoming}
       />
 
-      {/* Receiver live WebRTC download progress overlay */}
-      {receiving && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ width: '440px', textAlign: 'left' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <h3 style={{ margin: 0 }}>Receiving Files P2P</h3>
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ fontSize: '18px', padding: '0 4px', lineHeight: 1 }}
-                onClick={() => setReceiving(null)}
-                title="Close overlay"
-              >
-                ✕
-              </button>
-            </div>
-            <p style={{ fontSize: '13px', color: 'var(--gray-500)', marginBottom: '16px' }}>
-              Direct WebRTC transfer from <strong>{receiving.fromName || 'Nearby Device'}</strong>
-            </p>
-            <TransferProgress
-              progressItems={receiving.progressItems}
-              title="Downloading Directly to Browser"
-            />
-            <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-outline"
-                style={{ fontSize: '12px', padding: '6px 14px' }}
-                onClick={() => setReceiving(null)}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Receiver WebRTC download & files modal */}
+      <ReceivedFilesModal
+        receiving={receiving}
+        onClose={() => setReceiving(null)}
+      />
 
       {/* Incoming text message modal with 1-click clipboard copy */}
       <IncomingTextModal

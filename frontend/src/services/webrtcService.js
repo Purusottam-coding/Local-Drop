@@ -19,6 +19,22 @@ const RTC_CONFIG = {
 const CHUNK_SIZE = 64 * 1024 // 64 KB chunks
 const BUFFER_THRESHOLD = 1024 * 1024 // 1 MB backpressure threshold
 
+/**
+ * Trigger file download on demand without automatic browser force
+ */
+export function downloadFileBlob(blob, fileName) {
+  const url = typeof blob === 'string' ? blob : URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  if (typeof blob !== 'string') {
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  }
+}
+
 export class WebRTCManager {
   constructor(socket) {
     this.socket = socket
@@ -297,14 +313,11 @@ export class WebRTCManager {
         } else if (msg.type === 'file_end') {
           console.log(`[WebRTC] Completed receiving: ${msg.name}`)
 
-          // Reassemble blob and trigger download
+          // Reassemble blob and emit fileComplete (manual download on-demand)
           if (this.currentFileMeta) {
             const blob = new Blob(this.receivedChunks, {
               type: this.currentFileMeta.mimeType || 'application/octet-stream',
             })
-
-            // Trigger browser download
-            this.downloadBlob(blob, this.currentFileMeta.name)
 
             this.emit('fileComplete', {
               fileName: this.currentFileMeta.name,
@@ -347,16 +360,9 @@ export class WebRTCManager {
     }
   }
 
-  // Trigger file download in browser
+  // Trigger file download in browser on-demand
   downloadBlob(blob, fileName) {
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 3000)
+    downloadFileBlob(blob, fileName)
   }
 
   // Cleanup connections
