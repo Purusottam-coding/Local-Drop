@@ -29,38 +29,41 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone, 
     filesRef.current = queuedFiles
   }, [queuedFiles])
 
-  // Setup WebRTC callbacks
+  // Setup WebRTC callbacks using pub/sub listeners
   useEffect(() => {
     if (!webrtcManager) return
 
-    webrtcManager.onProgress = ({ fileIndex, fileName, transferredBytes, totalBytes, speed, percent, isSender }) => {
-      if (!isSender) return // Sender UI progress
-      setProgressItems((prev) => {
-        const next = [...prev]
-        if (!next[fileIndex]) {
-          next[fileIndex] = { name: fileName, size: totalBytes, pct: 0 }
-        }
-        next[fileIndex] = {
-          ...next[fileIndex],
-          name: fileName,
-          size: totalBytes,
-          transferred: transferredBytes,
-          pct: percent,
-          speed,
-          done: percent >= 100,
-        }
-        return next
-      })
-    }
+    const unsubProgress = webrtcManager.on(
+      'progress',
+      ({ fileIndex, fileName, transferredBytes, totalBytes, speed, percent, isSender }) => {
+        if (!isSender) return // Sender UI progress
+        setProgressItems((prev) => {
+          const next = [...prev]
+          if (!next[fileIndex]) {
+            next[fileIndex] = { name: fileName, size: totalBytes, pct: 0 }
+          }
+          next[fileIndex] = {
+            ...next[fileIndex],
+            name: fileName,
+            size: totalBytes,
+            transferred: transferredBytes,
+            pct: percent,
+            speed,
+            done: percent >= 100,
+          }
+          return next
+        })
+      }
+    )
 
-    webrtcManager.onFileComplete = ({ fileName, size, isSender }) => {
+    const unsubFileComplete = webrtcManager.on('fileComplete', ({ fileName, size, isSender }) => {
       if (isSender) {
         onFileDone?.({ name: fileName, size, direction: 'sent', peer: selectedPeer?.name })
         showToast(`Sent: ${fileName}`, 'success')
       }
-    }
+    })
 
-    webrtcManager.onAllComplete = ({ isSender }) => {
+    const unsubAllComplete = webrtcManager.on('allComplete', ({ isSender }) => {
       if (isSender) {
         showToast('All files sent successfully!', 'success')
         onTransferCompleted?.()
@@ -70,12 +73,19 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone, 
           setProgressItems([])
         }, 1500)
       }
-    }
+    })
 
-    webrtcManager.onError = (err) => {
+    const unsubError = webrtcManager.on('error', (err) => {
       console.error('[WebRTC Transfer Error]:', err)
       showToast('Transfer failed over WebRTC', 'error')
       setState(STATE.IDLE)
+    })
+
+    return () => {
+      unsubProgress()
+      unsubFileComplete()
+      unsubAllComplete()
+      unsubError()
     }
   }, [webrtcManager, selectedPeer, onFileDone, onTransferCompleted, showToast])
 

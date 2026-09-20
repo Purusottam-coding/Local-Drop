@@ -173,11 +173,11 @@ export default function App() {
     }
   }, [socket, trustedDeviceIds, acceptTransfer, showToast])
 
-  // WebRTC receiver-side callbacks
+  // WebRTC receiver-side callbacks using pub/sub listeners
   useEffect(() => {
     if (!webrtcManager) return
 
-    webrtcManager.onProgress = (info) => {
+    const unsubProgress = webrtcManager.on('progress', (info) => {
       if (!info.isSender) {
         setReceiving((prev) => {
           if (!prev) return prev
@@ -193,21 +193,39 @@ export default function App() {
           return { ...prev, progressItems: next }
         })
       }
-    }
+    })
 
-    webrtcManager.onFileComplete = ({ fileName, isSender }) => {
+    const unsubFileComplete = webrtcManager.on('fileComplete', ({ fileName, isSender }) => {
       if (!isSender) {
         showToast(`Downloaded: ${fileName}`, 'success')
         loadHistory()
+        setReceiving((prev) => {
+          if (!prev) return prev
+          const next = prev.progressItems.map((item) =>
+            item.name === fileName
+              ? { ...item, pct: 100, done: true, speed: '✓ Saved' }
+              : item
+          )
+          return { ...prev, progressItems: next }
+        })
       }
-    }
+    })
 
-    webrtcManager.onAllComplete = ({ isSender }) => {
+    const unsubAllComplete = webrtcManager.on('allComplete', ({ isSender }) => {
       if (!isSender) {
         showToast('All files received and saved!', 'success')
-        setTimeout(() => setReceiving(null), 1500)
         loadHistory()
+        // Automatically close the receiving overlay after a brief delay
+        setTimeout(() => {
+          setReceiving(null)
+        }, 1200)
       }
+    })
+
+    return () => {
+      unsubProgress()
+      unsubFileComplete()
+      unsubAllComplete()
     }
   }, [webrtcManager, loadHistory, showToast])
 
@@ -324,14 +342,35 @@ export default function App() {
       {receiving && (
         <div className="modal-overlay">
           <div className="modal" style={{ width: '440px', textAlign: 'left' }}>
-            <h3 style={{ marginBottom: '4px' }}>Receiving Files P2P</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <h3 style={{ margin: 0 }}>Receiving Files P2P</h3>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ fontSize: '18px', padding: '0 4px', lineHeight: 1 }}
+                onClick={() => setReceiving(null)}
+                title="Close overlay"
+              >
+                ✕
+              </button>
+            </div>
             <p style={{ fontSize: '13px', color: 'var(--gray-500)', marginBottom: '16px' }}>
-              Direct WebRTC transfer from <strong>{receiving.fromName}</strong>
+              Direct WebRTC transfer from <strong>{receiving.fromName || 'Nearby Device'}</strong>
             </p>
             <TransferProgress
               progressItems={receiving.progressItems}
               title="Downloading Directly to Browser"
             />
+            <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ fontSize: '12px', padding: '6px 14px' }}
+                onClick={() => setReceiving(null)}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         </div>
       )}

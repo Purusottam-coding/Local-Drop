@@ -4,7 +4,7 @@
  * Features:
  * - Direct P2P RTCDataChannel transmission (no server storage)
  * - 64 KB chunking with backpressure buffering
- * - Multiple file support
+ * - Event-driven pub/sub architecture (supports multiple listeners)
  * - Automatic binary reassembly and download trigger
  * - Real-time progress, speed, and percent calculation
  */
@@ -27,11 +27,13 @@ export class WebRTCManager {
     this.targetSocketId = null
     this.currentTransferId = null
 
-    // Callbacks
-    this.onProgress = null
-    this.onFileComplete = null
-    this.onAllComplete = null
-    this.onError = null
+    // Event listeners map (supports multiple subscribers)
+    this.events = {
+      progress: [],
+      fileComplete: [],
+      allComplete: [],
+      error: [],
+    }
 
     // Receiver state
     this.currentFileMeta = null
@@ -39,6 +41,49 @@ export class WebRTCManager {
     this.receivedBytes = 0
 
     this.initSocketListeners()
+  }
+
+  // Subscribe to an event
+  on(event, handler) {
+    if (this.events[event]) {
+      this.events[event].push(handler)
+    }
+    // Return unsubscribe function
+    return () => this.off(event, handler)
+  }
+
+  // Unsubscribe from an event
+  off(event, handler) {
+    if (this.events[event]) {
+      this.events[event] = this.events[event].filter((h) => h !== handler)
+    }
+  }
+
+  // Emit event to all subscribers
+  emit(event, data) {
+    // Also trigger legacy single callback if present
+    if (event === 'progress' && typeof this.onProgress === 'function') {
+      try { this.onProgress(data) } catch (e) { console.error(e) }
+    }
+    if (event === 'fileComplete' && typeof this.onFileComplete === 'function') {
+      try { this.onFileComplete(data) } catch (e) { console.error(e) }
+    }
+    if (event === 'allComplete' && typeof this.onAllComplete === 'function') {
+      try { this.onAllComplete(data) } catch (e) { console.error(e) }
+    }
+    if (event === 'error' && typeof this.onError === 'function') {
+      try { this.onError(data) } catch (e) { console.error(e) }
+    }
+
+    if (this.events[event]) {
+      this.events[event].forEach((handler) => {
+        try {
+          handler(data)
+        } catch (err) {
+          console.error(`[WebRTC] Error in ${event} listener:`, err)
+        }
+      })
+    }
   }
 
   initSocketListeners() {
@@ -99,7 +144,7 @@ export class WebRTCManager {
 
     this.dataChannel.onerror = (err) => {
       console.error('[WebRTC] DataChannel error:', err)
-      this.onError?.(err)
+      this.emit('error', err)
     }
 
     // Create and send offer
@@ -159,7 +204,7 @@ export class WebRTCManager {
           const speed = ((offset - lastProgressBytes) / (elapsed || 0.001) / (1024 * 1024)).toFixed(1)
           const pct = Math.min(100, Math.round((offset / file.size) * 100))
 
-          this.onProgress?.({
+          this.emit('progress', {
             fileIndex: i,
             fileName: file.name,
             transferredBytes: offset,
@@ -176,13 +221,13 @@ export class WebRTCManager {
 
       // 3. Send file completion message
       this.dataChannel.send(JSON.stringify({ type: 'file_end', index: i, name: file.name }))
-      this.onFileComplete?.({ fileName: file.name, size: file.size, isSender: true })
+      this.emit('fileComplete', { fileName: file.name, size: file.size, isSender: true })
     }
 
     // 4. Send all files done
     this.dataChannel.send(JSON.stringify({ type: 'all_done', transferId: this.currentTransferId }))
     this.socket.emit('transfer:complete', { transferId: this.currentTransferId })
-    this.onAllComplete?.({ isSender: true })
+    this.emit('allComplete', { isSender: true })
   }
 
   // -------------------------------------------------------------
@@ -213,7 +258,7 @@ export class WebRTCManager {
 
       this.dataChannel.onerror = (err) => {
         console.error('[WebRTC] DataChannel receiver error:', err)
-        this.onError?.(err)
+        this.emit('error', err)
       }
     }
 
@@ -240,12 +285,12 @@ export class WebRTCManager {
           this.receivedChunks = []
           this.receivedBytes = 0
 
-          this.onProgress?.({
+          this.emit('progress', {
             fileIndex: msg.index,
             fileName: msg.name,
             transferredBytes: 0,
             totalBytes: msg.size,
-            speed: '0.0 MB/s',
+            speed: 'Receiving...',
             percent: 0,
             isSender: false,
           })
@@ -261,7 +306,7 @@ export class WebRTCManager {
             // Trigger browser download
             this.downloadBlob(blob, this.currentFileMeta.name)
 
-            this.onFileComplete?.({
+            this.emit('fileComplete', {
               fileName: this.currentFileMeta.name,
               size: this.currentFileMeta.size,
               blob,
@@ -274,7 +319,7 @@ export class WebRTCManager {
           }
         } else if (msg.type === 'all_done') {
           console.log('[WebRTC] All files received successfully')
-          this.onAllComplete?.({ isSender: false })
+          this.emit('allComplete', { isSender: false })
         }
       } catch (err) {
         console.error('[WebRTC] Error parsing control message:', err)
@@ -290,7 +335,7 @@ export class WebRTCManager {
       const total = this.currentFileMeta.size || 1
       const pct = Math.min(100, Math.round((this.receivedBytes / total) * 100))
 
-      this.onProgress?.({
+      this.emit('progress', {
         fileIndex: this.currentFileMeta.index,
         fileName: this.currentFileMeta.name,
         transferredBytes: this.receivedBytes,
@@ -311,7 +356,7 @@ export class WebRTCManager {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 2000)
+    setTimeout(() => URL.revokeObjectURL(url), 3000)
   }
 
   // Cleanup connections
