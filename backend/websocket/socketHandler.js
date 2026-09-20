@@ -2,6 +2,55 @@ const { v4: uuidv4 } = require("uuid");
 const Device = require("../models/Device");
 const Transfer = require("../models/Transfer");
 const Session = require("../models/Session");
+const { sanitizeFilename, sanitizeFilesMetadata } = require("../utils/security");
+
+// In-memory pending PIN pairing requests: key = `${targetDeviceId}:${senderDeviceId}`
+// Value: { pin, senderSocketId, senderDeviceId, targetDeviceId, expiresAt }
+const pendingPairings = new Map();
+
+// In-memory set for active pairings: `${deviceIdA}:${deviceIdB}`
+const activePairingsCache = new Set();
+
+function registerPairing(devA, devB) {
+  if (!devA || !devB) return;
+  activePairingsCache.add(`${devA}:${devB}`);
+  activePairingsCache.add(`${devB}:${devA}`);
+}
+
+function unregisterPairing(devA, devB) {
+  if (!devA || !devB) return;
+  activePairingsCache.delete(`${devA}:${devB}`);
+  activePairingsCache.delete(`${devB}:${devA}`);
+}
+
+async function areDevicesPaired(devA, devB) {
+  if (!devA || !devB) return false;
+  if (activePairingsCache.has(`${devA}:${devB}`)) return true;
+  const deviceA = await Device.findOne({ deviceId: devA });
+  if (deviceA && Array.isArray(deviceA.trustedDevices) && deviceA.trustedDevices.includes(devB)) {
+    const deviceB = await Device.findOne({ deviceId: devB });
+    if (deviceB && Array.isArray(deviceB.trustedDevices) && deviceB.trustedDevices.includes(devA)) {
+      registerPairing(devA, devB);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Helper to clean up any pairing state when a device leaves
+function cleanupDevicePairingState(deviceId) {
+  if (!deviceId) return;
+  for (const key of activePairingsCache) {
+    if (key.startsWith(`${deviceId}:`) || key.endsWith(`:${deviceId}`)) {
+      activePairingsCache.delete(key);
+    }
+  }
+  for (const [key, val] of pendingPairings.entries()) {
+    if (val.senderDeviceId === deviceId || val.targetDeviceId === deviceId) {
+      pendingPairings.delete(key);
+    }
+  }
+}
 
 function setupSocketIO(io, getLANIp) {
   io.on("connection", (socket) => {
@@ -119,40 +168,107 @@ function setupSocketIO(io, getLANIp) {
     socket.on("devices:refresh", sendPeerList);
     socket.on("peers:scan", sendPeerList);
 
-    // 3. WebRTC Signaling Relays
-    socket.on("webrtc:offer", ({ targetSocketId, to, offer, transferId }) => {
+    // 3. WebRTC Signaling Relays (Secured: mutually paired check)
+    socket.on("webrtc:offer", async ({ targetSocketId, to, offer, transferId }) => {
       const recipient = targetSocketId || to;
-      if (recipient) {
-        io.to(recipient).emit("webrtc:offer", {
+      if (!recipient) return;
+
+      try {
+        const sender = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
+        });
+        const receiver = await Device.findOne({
+          $or: [{ socketId: recipient }, { deviceId: recipient }],
+        });
+
+        if (!sender || !receiver) {
+          return socket.emit("webrtc:error", { message: "Target peer not found" });
+        }
+
+        const paired = await areDevicesPaired(sender.deviceId, receiver.deviceId);
+        if (!paired) {
+          console.warn(`[WebRTC Blocked] Unauthorized offer attempt: ${sender.deviceId} -> ${receiver.deviceId}`);
+          return socket.emit("transfer:rejected", {
+            reason: "Unauthorized WebRTC connection: devices must be paired first.",
+          });
+        }
+
+        io.to(receiver.socketId).emit("webrtc:offer", {
           fromSocketId: socket.id,
-          fromDeviceId: currentDeviceId,
+          fromDeviceId: currentDeviceId || sender.deviceId,
           offer,
           transferId,
         });
+      } catch (err) {
+        console.error("Error relaying webrtc:offer:", err);
       }
     });
 
-    socket.on("webrtc:answer", ({ targetSocketId, to, answer, transferId }) => {
+    socket.on("webrtc:answer", async ({ targetSocketId, to, answer, transferId }) => {
       const recipient = targetSocketId || to;
-      if (recipient) {
-        io.to(recipient).emit("webrtc:answer", {
+      if (!recipient) return;
+
+      try {
+        const sender = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
+        });
+        const receiver = await Device.findOne({
+          $or: [{ socketId: recipient }, { deviceId: recipient }],
+        });
+
+        if (!sender || !receiver) return;
+
+        const paired = await areDevicesPaired(sender.deviceId, receiver.deviceId);
+        if (!paired) {
+          console.warn(`[WebRTC Blocked] Unauthorized answer attempt: ${sender.deviceId} -> ${receiver.deviceId}`);
+          return;
+        }
+
+        io.to(receiver.socketId).emit("webrtc:answer", {
           fromSocketId: socket.id,
-          fromDeviceId: currentDeviceId,
+          fromDeviceId: currentDeviceId || sender.deviceId,
           answer,
           transferId,
         });
+      } catch (err) {
+        console.error("Error relaying webrtc:answer:", err);
       }
     });
 
-    socket.on("webrtc:ice-candidate", ({ targetSocketId, to, candidate, transferId }) => {
+    socket.on("webrtc:ice-candidate", async ({ targetSocketId, to, candidate, transferId }) => {
       const recipient = targetSocketId || to;
-      if (recipient) {
-        io.to(recipient).emit("webrtc:ice-candidate", {
+      if (!recipient) return;
+
+      try {
+        const sender = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
+        });
+        const receiver = await Device.findOne({
+          $or: [{ socketId: recipient }, { deviceId: recipient }],
+        });
+
+        if (!sender || !receiver) return;
+
+        const paired = await areDevicesPaired(sender.deviceId, receiver.deviceId);
+        if (!paired) return;
+
+        io.to(receiver.socketId).emit("webrtc:ice-candidate", {
           fromSocketId: socket.id,
-          fromDeviceId: currentDeviceId,
+          fromDeviceId: currentDeviceId || sender.deviceId,
           candidate,
           transferId,
         });
+      } catch (err) {
+        console.error("Error relaying webrtc:ice-candidate:", err);
       }
     });
 
@@ -161,7 +277,9 @@ function setupSocketIO(io, getLANIp) {
       try {
         const targetSocketId = data.targetSocketId || data.to;
         const targetDeviceId = data.targetDeviceId;
-        const files = data.files || [];
+        const rawFiles = data.files || [];
+        // Sanitize incoming file metadata against path traversal & control characters
+        const files = sanitizeFilesMetadata(rawFiles);
 
         const sender = await Device.findOne({ socketId: socket.id });
         const receiver = await Device.findOne({
@@ -179,10 +297,7 @@ function setupSocketIO(io, getLANIp) {
         const isPaired =
           sender &&
           receiver &&
-          sender.trustedDevices &&
-          sender.trustedDevices.includes(receiver.deviceId) &&
-          receiver.trustedDevices &&
-          receiver.trustedDevices.includes(sender.deviceId);
+          (await areDevicesPaired(sender.deviceId, receiver.deviceId));
 
         if (!isPaired) {
           return socket.emit("transfer:rejected", {
@@ -243,12 +358,41 @@ function setupSocketIO(io, getLANIp) {
         const { transferId } = payload;
         const senderSocketId = payload.senderSocketId || payload.from;
 
+        const transfer = await Transfer.findOne({ transferId });
+        if (!transfer) {
+          return socket.emit("transfer:error", { message: "Transfer request not found" });
+        }
+
+        const receiverDevice = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
+        });
+
+        // Security check: verify receiver identity matches designated receiver
+        if (receiverDevice && transfer.receiver && transfer.receiver.deviceId && receiverDevice.deviceId) {
+          if (transfer.receiver.deviceId !== receiverDevice.deviceId) {
+            return socket.emit("transfer:error", {
+              message: "Unauthorized: You are not the designated recipient of this transfer.",
+            });
+          }
+        }
+
+        // Verify devices are still mutually paired
+        if (transfer.sender?.deviceId && transfer.receiver?.deviceId) {
+          const isPaired = await areDevicesPaired(transfer.sender.deviceId, transfer.receiver.deviceId);
+          if (!isPaired) {
+            return socket.emit("transfer:error", {
+              message: "Cannot accept transfer: devices are no longer paired.",
+            });
+          }
+        }
+
         await Transfer.findOneAndUpdate(
           { transferId },
           { status: "accepted", respondedAt: new Date() }
         );
-
-        const receiverDevice = await Device.findOne({ socketId: socket.id });
 
         if (senderSocketId) {
           io.to(senderSocketId).emit("transfer:accepted", {
@@ -353,24 +497,42 @@ function setupSocketIO(io, getLANIp) {
     // 6. Device Pairing & Trusted Devices Handshake
     socket.on("pairing:request", async ({ targetSocketId, targetDeviceId }) => {
       try {
-        const sender = await Device.findOne({ socketId: socket.id });
+        const sender = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
+        });
         const receiver = await Device.findOne({
-          $or: [{ socketId: targetSocketId }, { deviceId: targetDeviceId }],
+          $or: [
+            ...(targetSocketId ? [{ socketId: targetSocketId }] : []),
+            ...(targetDeviceId ? [{ deviceId: targetDeviceId }] : []),
+          ],
         });
 
-        if (!receiver) {
+        if (!receiver || !sender) {
           return socket.emit("pairing:error", { message: "Target device not found" });
         }
 
         // Generate 6-digit PIN
         const pin = Math.floor(100000 + Math.random() * 900000).toString();
 
+        // Store pending pairing with 60-second TTL
+        const key = `${receiver.deviceId}:${sender.deviceId}`;
+        pendingPairings.set(key, {
+          pin,
+          senderSocketId: socket.id,
+          senderDeviceId: sender.deviceId,
+          targetDeviceId: receiver.deviceId,
+          expiresAt: Date.now() + 60000,
+        });
+
         // Send to receiver
         io.to(receiver.socketId).emit("pairing:incoming", {
           from: {
             socketId: socket.id,
             name: sender ? sender.name : "Nearby Device",
-            deviceId: currentDeviceId,
+            deviceId: sender.deviceId,
             type: sender?.type || "browser",
           },
           pin,
@@ -379,6 +541,7 @@ function setupSocketIO(io, getLANIp) {
         // Notify sender of initiated pairing
         socket.emit("pairing:pending", {
           targetDeviceName: receiver.name,
+          targetDeviceId: receiver.deviceId,
           pin,
         });
 
@@ -388,54 +551,149 @@ function setupSocketIO(io, getLANIp) {
       }
     });
 
-    socket.on("pairing:accept", async ({ senderSocketId, senderDeviceId }) => {
+    socket.on("pairing:accept", async ({ senderSocketId, senderDeviceId, pin }) => {
       try {
-        const receiver = await Device.findOne({ socketId: socket.id });
+        const receiver = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
+        });
         const sender = await Device.findOne({
-          $or: [{ socketId: senderSocketId }, { deviceId: senderDeviceId }],
+          $or: [
+            ...(senderSocketId ? [{ socketId: senderSocketId }] : []),
+            ...(senderDeviceId ? [{ deviceId: senderDeviceId }] : []),
+          ],
         });
 
-        if (receiver && sender) {
-          // Add to trusted devices in MongoDB for both parties
-          await Device.findOneAndUpdate(
-            { deviceId: receiver.deviceId },
-            { $addToSet: { trustedDevices: sender.deviceId } }
-          );
-
-          await Device.findOneAndUpdate(
-            { deviceId: sender.deviceId },
-            { $addToSet: { trustedDevices: receiver.deviceId } }
-          );
-
-          // Notify both devices of successful pairing
-          io.to(sender.socketId).emit("pairing:success", {
-            pairedDevice: {
-              deviceId: receiver.deviceId,
-              name: receiver.name,
-              isTrusted: true,
-            },
-          });
-
-          socket.emit("pairing:success", {
-            pairedDevice: {
-              deviceId: sender.deviceId,
-              name: sender.name,
-              isTrusted: true,
-            },
-          });
-
-          console.log(`[Pairing Success] ${receiver.name} <-> ${sender.name} are now trusted`);
+        if (!receiver || !sender) {
+          return socket.emit("pairing:error", { message: "Device not found" });
         }
+
+        const key = `${receiver.deviceId}:${sender.deviceId}`;
+        const pending = pendingPairings.get(key);
+
+        if (!pending) {
+          return socket.emit("pairing:error", {
+            message: "No pending pairing request found or request has expired.",
+          });
+        }
+
+        if (Date.now() > pending.expiresAt) {
+          pendingPairings.delete(key);
+          return socket.emit("pairing:error", {
+            message: "Pairing PIN expired. Please request pairing again.",
+          });
+        }
+
+        // Enforce PIN verification
+        if (!pin || String(pin).trim() !== String(pending.pin).trim()) {
+          console.warn(`[Pairing Failed] PIN mismatch for ${receiver.name} <-> ${sender.name}`);
+          return socket.emit("pairing:error", {
+            message: "Invalid pairing PIN. Connection rejected.",
+          });
+        }
+
+        // Successfully verified PIN! Clear pending request
+        pendingPairings.delete(key);
+
+        // Add to trusted devices in MongoDB for both parties
+        await Device.findOneAndUpdate(
+          { deviceId: receiver.deviceId },
+          { $addToSet: { trustedDevices: sender.deviceId } }
+        );
+
+        await Device.findOneAndUpdate(
+          { deviceId: sender.deviceId },
+          { $addToSet: { trustedDevices: receiver.deviceId } }
+        );
+
+        registerPairing(receiver.deviceId, sender.deviceId);
+
+        // Notify both devices of successful pairing
+        io.to(sender.socketId).emit("pairing:success", {
+          pairedDevice: {
+            deviceId: receiver.deviceId,
+            name: receiver.name,
+            isTrusted: true,
+          },
+        });
+
+        socket.emit("pairing:success", {
+          pairedDevice: {
+            deviceId: sender.deviceId,
+            name: sender.name,
+            isTrusted: true,
+          },
+        });
+
+        console.log(`[Pairing Success] Verified PIN: ${receiver.name} <-> ${sender.name} are now connected`);
       } catch (err) {
         console.error("Error accepting pairing:", err);
       }
     });
 
-    socket.on("pairing:reject", async ({ senderSocketId, reason }) => {
-      if (senderSocketId) {
-        io.to(senderSocketId).emit("pairing:rejected", {
-          reason: reason || "Pairing request was declined",
+    socket.on("pairing:cancel", async ({ targetSocketId, targetDeviceId }) => {
+      try {
+        const sender = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
         });
+        const receiver = await Device.findOne({
+          $or: [
+            ...(targetSocketId ? [{ socketId: targetSocketId }] : []),
+            ...(targetDeviceId ? [{ deviceId: targetDeviceId }] : []),
+          ],
+        });
+
+        if (receiver && sender) {
+          const key = `${receiver.deviceId}:${sender.deviceId}`;
+          pendingPairings.delete(key);
+          io.to(receiver.socketId).emit("pairing:cancelled", {
+            from: {
+              socketId: socket.id,
+              deviceId: sender.deviceId,
+              name: sender.name,
+            },
+            message: "Pairing request was cancelled by the sender.",
+          });
+          console.log(`[Pairing Cancelled] ${sender.name} cancelled pairing to ${receiver.name}`);
+        }
+      } catch (err) {
+        console.error("Error cancelling pairing:", err);
+      }
+    });
+
+    socket.on("pairing:reject", async ({ senderSocketId, senderDeviceId, reason }) => {
+      try {
+        const receiver = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
+            { socketId: socket.id },
+          ],
+        });
+        const sender = await Device.findOne({
+          $or: [
+            ...(senderSocketId ? [{ socketId: senderSocketId }] : []),
+            ...(senderDeviceId ? [{ deviceId: senderDeviceId }] : []),
+          ],
+        });
+
+        if (receiver && sender) {
+          const key = `${receiver.deviceId}:${sender.deviceId}`;
+          pendingPairings.delete(key);
+        }
+
+        const targetSocket = sender ? sender.socketId : senderSocketId;
+        if (targetSocket) {
+          io.to(targetSocket).emit("pairing:rejected", {
+            reason: reason || "Pairing request was declined",
+          });
+        }
+      } catch (err) {
+        console.error("Error rejecting pairing:", err);
       }
     });
 
@@ -456,6 +714,8 @@ function setupSocketIO(io, getLANIp) {
           { deviceId: targetDeviceId },
           { $pull: { trustedDevices: myDevice.deviceId }, isTrusted: false }
         );
+
+        unregisterPairing(myDevice.deviceId, targetDeviceId);
 
         // Find target socket
         let destSocketId = targetSocketId;
@@ -519,6 +779,8 @@ function setupSocketIO(io, getLANIp) {
             { deviceId: scannerId },
             { $addToSet: { trustedDevices: hostDevice.deviceId } }
           );
+
+          registerPairing(scannerId, hostDevice.deviceId);
 
           const scannerPayload = {
             id: socket.id,
@@ -803,6 +1065,8 @@ function setupSocketIO(io, getLANIp) {
           disconnectingDev.socketId = null;
           disconnectingDev.lastSeen = new Date();
           await disconnectingDev.save();
+
+          cleanupDevicePairingState(devId);
 
           const offlinePayload = { deviceId: disconnectingDev.deviceId, name: disconnectingDev.name, id: socket.id };
           io.emit("device:offline", offlinePayload);

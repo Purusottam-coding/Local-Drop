@@ -9,6 +9,8 @@
  * - Real-time progress, speed, and percent calculation
  */
 
+import { sanitizeFilename } from '../utils/helpers'
+
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -23,10 +25,11 @@ const BUFFER_THRESHOLD = 1024 * 1024 // 1 MB backpressure threshold
  * Trigger file download on demand without automatic browser force
  */
 export function downloadFileBlob(blob, fileName) {
+  const safeName = sanitizeFilename(fileName)
   const url = typeof blob === 'string' ? blob : URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = fileName
+  a.download = safeName
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -296,14 +299,18 @@ export class WebRTCManager {
         const msg = JSON.parse(data)
 
         if (msg.type === 'file_header') {
-          console.log(`[WebRTC] Receiving file: ${msg.name} (${msg.size} bytes)`)
+          // Sanitize received filename against path traversal & dangerous characters
+          const safeName = sanitizeFilename(msg.name || 'received_file')
+          msg.name = safeName
+
+          console.log(`[WebRTC] Receiving file: ${safeName} (${msg.size} bytes)`)
           this.currentFileMeta = msg
           this.receivedChunks = []
           this.receivedBytes = 0
 
           this.emit('progress', {
             fileIndex: msg.index,
-            fileName: msg.name,
+            fileName: safeName,
             transferredBytes: 0,
             totalBytes: msg.size,
             speed: 'Receiving...',
@@ -342,6 +349,17 @@ export class WebRTCManager {
 
     // Binary message -> file chunk
     if (data instanceof ArrayBuffer && this.currentFileMeta) {
+      // Guard against malicious oversize buffer bombs (> declared size + 2MB allowance)
+      const maxAllowed = (this.currentFileMeta.size || 0) + 2 * 1024 * 1024
+      if (this.receivedBytes + data.byteLength > maxAllowed) {
+        console.error('[WebRTC] Aborting file reception: payload exceeds declared file size bounds.')
+        this.receivedChunks = []
+        this.receivedBytes = 0
+        this.currentFileMeta = null
+        this.emit('error', new Error('File transfer aborted: incoming data exceeded size limit.'))
+        return
+      }
+
       this.receivedChunks.push(data)
       this.receivedBytes += data.byteLength
 

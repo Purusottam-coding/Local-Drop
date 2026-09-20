@@ -1,5 +1,6 @@
 const Session = require("../models/Session");
 const crypto = require("crypto");
+const { sanitizeFilename } = require("../utils/security");
 
 /**
  * Generate a friendly session code: DROP-XXXX
@@ -261,10 +262,12 @@ const addSessionFile = async (req, res) => {
       });
     }
 
+    const safeName = sanitizeFilename(name);
+
     session.files.push({
       fileId,
-      name,
-      size,
+      name: safeName,
+      size: typeof size === "number" && size >= 0 ? size : 0,
       type: type || "",
       senderName: senderName || "Member",
       senderDeviceId: senderDeviceId || "",

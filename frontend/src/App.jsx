@@ -215,6 +215,18 @@ export default function App() {
       showToast(`Pairing declined: ${reason || 'Rejected by peer'}`, 'info')
     })
 
+    socket.on('pairing:cancelled', ({ from, message }) => {
+      setIncomingPairing(null)
+      showToast(message || `${from?.name || 'Peer'} cancelled pairing`, 'info')
+    })
+
+    socket.on('pairing:error', ({ message }) => {
+      playChime('error')
+      setPendingPairing(null)
+      setIncomingPairing(null)
+      showToast(message || 'Pairing error', 'error')
+    })
+
     // Mutual disconnect event from peer
     socket.on('pairing:disconnected', ({ disconnectedBy, targetDeviceId }) => {
       playChime('error')
@@ -440,6 +452,7 @@ export default function App() {
     socket.emit('pairing:accept', {
       senderSocketId,
       senderDeviceId: incomingPairing.from?.deviceId,
+      pin: incomingPairing.pin,
     })
     setIncomingPairing(null)
   }
@@ -449,9 +462,19 @@ export default function App() {
     const senderSocketId = incomingPairing.from?.socketId || incomingPairing.from?.id
     socket.emit('pairing:reject', {
       senderSocketId,
+      senderDeviceId: incomingPairing.from?.deviceId,
       reason: 'Declined by user',
     })
     setIncomingPairing(null)
+  }
+
+  const handleCancelPairing = () => {
+    if (pendingPairing && socket) {
+      socket.emit('pairing:cancel', {
+        targetDeviceId: pendingPairing.targetDeviceId,
+      })
+    }
+    setPendingPairing(null)
   }
 
   const handleToggleTrust = async (peer, shouldTrust) => {
@@ -606,7 +629,7 @@ export default function App() {
         pendingPairing={pendingPairing}
         onAccept={handleAcceptPairing}
         onReject={handleRejectPairing}
-        onCancel={() => setPendingPairing(null)}
+        onCancel={handleCancelPairing}
       />
 
       {/* QR Code Pairing Modal */}

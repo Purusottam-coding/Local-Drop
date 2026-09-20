@@ -26,3 +26,48 @@ export const fileEmoji = (name = '') => {
   }
   return map[ext] || '📁'
 }
+
+/**
+ * Sanitize untrusted filename against path traversal, control characters, and dangerous characters.
+ */
+export const sanitizeFilename = (filename) => {
+  if (!filename || typeof filename !== 'string') {
+    return 'unnamed_file'
+  }
+
+  // 1. Strip any directory path components
+  let clean = filename.replace(/^.*[\\\/]/, '')
+
+  // 2. Remove null bytes and non-printable control characters
+  clean = clean.replace(/[\x00-\x1f\x80-\x9f]/g, '')
+
+  // 3. Replace forbidden filesystem characters (< > : " / \ | ? *) with an underscore
+  clean = clean.replace(/[<>:"/\\|?*]/g, '_')
+
+  // 4. Prevent relative path traversal sequences
+  clean = clean.replace(/\.\.+/g, '.')
+
+  // 5. Trim leading and trailing whitespace and periods
+  clean = clean.trim().replace(/^\.+/, '').replace(/\.+$/, '')
+
+  // 6. Check for Windows reserved device names
+  const reservedRegex = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+  if (reservedRegex.test(clean)) {
+    clean = `file_${clean}`
+  }
+
+  // 7. Enforce maximum filename length (255 chars) while preserving extension
+  const MAX_LEN = 255
+  if (clean.length > MAX_LEN) {
+    const extIndex = clean.lastIndexOf('.')
+    if (extIndex !== -1 && extIndex > clean.length - 20) {
+      const ext = clean.substring(extIndex)
+      clean = clean.substring(0, MAX_LEN - ext.length) + ext
+    } else {
+      clean = clean.substring(0, MAX_LEN)
+    }
+  }
+
+  return clean || 'unnamed_file'
+}
+
