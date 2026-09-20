@@ -82,8 +82,7 @@ export default function DevicePanel({
 
         {!scanning &&
           peers.map((peer) => {
-            const isTrusted =
-              trustedDeviceIds.includes(peer.deviceId) || peer.isTrusted
+            const isConnected = trustedDeviceIds.includes(peer.deviceId)
 
             return (
               <li
@@ -97,9 +96,9 @@ export default function DevicePanel({
                   <div className="ip">{peer.ip}</div>
                 </div>
 
-                {/* Trusted badge / Pair button */}
+                {/* Connected badge / Pair button */}
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  {isTrusted ? (
+                  {isConnected ? (
                     <button
                       type="button"
                       className="badge sent"

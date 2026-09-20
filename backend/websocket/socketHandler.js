@@ -421,6 +421,57 @@ function setupSocketIO(io, getLANIp) {
       }
     });
 
+    // Mutual unpair / disconnect between paired devices
+    socket.on("pairing:disconnect", async ({ targetDeviceId, targetSocketId }) => {
+      try {
+        const myDevice = await Device.findOne({
+          $or: [{ socketId: socket.id }, { deviceId: currentDeviceId }],
+        });
+        if (!myDevice) return;
+
+        // Mutually disconnect both sides in MongoDB
+        await Device.findOneAndUpdate(
+          { deviceId: myDevice.deviceId },
+          { $pull: { trustedDevices: targetDeviceId }, isTrusted: false }
+        );
+        await Device.findOneAndUpdate(
+          { deviceId: targetDeviceId },
+          { $pull: { trustedDevices: myDevice.deviceId }, isTrusted: false }
+        );
+
+        // Find target socket
+        let destSocketId = targetSocketId;
+        const targetDev = await Device.findOne({ deviceId: targetDeviceId });
+        if (targetDev && targetDev.socketId) {
+          destSocketId = targetDev.socketId;
+        }
+
+        // Notify target device that pairing was disconnected
+        if (destSocketId) {
+          io.to(destSocketId).emit("pairing:disconnected", {
+            disconnectedBy: {
+              deviceId: myDevice.deviceId,
+              name: myDevice.name,
+            },
+            targetDeviceId: myDevice.deviceId,
+          });
+        }
+
+        // Acknowledge back to sender
+        socket.emit("pairing:disconnected", {
+          disconnectedBy: {
+            deviceId: myDevice.deviceId,
+            name: myDevice.name,
+          },
+          targetDeviceId: targetDeviceId,
+        });
+
+        console.log(`[Pairing Disconnect] ${myDevice.name} <-> ${targetDev?.name || targetDeviceId} disconnected mutually`);
+      } catch (err) {
+        console.error("Error in pairing:disconnect:", err);
+      }
+    });
+
     // 6.2 Instant QR Code Pairing Handshake
     socket.on("qr:pair", async ({ hostDeviceId, pin }) => {
       try {

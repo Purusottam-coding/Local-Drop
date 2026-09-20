@@ -209,6 +209,16 @@ export default function App() {
       showToast(`Pairing declined: ${reason || 'Rejected by peer'}`, 'info')
     })
 
+    // Mutual disconnect event from peer
+    socket.on('pairing:disconnected', ({ disconnectedBy, targetDeviceId }) => {
+      playChime('error')
+      const targetId = targetDeviceId || disconnectedBy?.deviceId
+      setTrustedDeviceIds((prev) =>
+        prev.filter((id) => id !== targetId && id !== disconnectedBy?.deviceId)
+      )
+      showToast(`Disconnected from ${disconnectedBy?.name || 'Device'}`, 'info')
+    })
+
     // Instant QR code pairing success handler
     socket.on('qr:paired', ({ pairedDevice, message }) => {
       playChime('paired')
@@ -308,6 +318,7 @@ export default function App() {
       socket.off('pairing:pending')
       socket.off('pairing:success')
       socket.off('pairing:rejected')
+      socket.off('pairing:disconnected')
       socket.off('qr:paired')
       socket.off('qr:error')
       socket.off('session:updated')
@@ -444,6 +455,12 @@ export default function App() {
         setTrustedDeviceIds((prev) => [...prev, peer.deviceId])
         showToast(`Connected with ${peer.name}`, 'success')
       } else {
+        if (socket) {
+          socket.emit('pairing:disconnect', {
+            targetDeviceId: peer.deviceId,
+            targetSocketId: peer.socketId || peer.id,
+          })
+        }
         await deviceApi.removeTrustedDevice(myDevice.deviceId, peer.deviceId)
         setTrustedDeviceIds((prev) => prev.filter((id) => id !== peer.deviceId))
         showToast(`Disconnected from ${peer.name}`, 'info')

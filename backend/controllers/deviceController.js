@@ -124,10 +124,16 @@ const removeTrustedDevice = async (req, res) => {
   try {
     const { deviceId, targetDeviceId } = req.params;
 
+    // Mutually disconnect both devices
     const device = await Device.findOneAndUpdate(
       { deviceId },
-      { $pull: { trustedDevices: targetDeviceId } },
+      { $pull: { trustedDevices: targetDeviceId }, isTrusted: false },
       { new: true }
+    );
+
+    await Device.findOneAndUpdate(
+      { deviceId: targetDeviceId },
+      { $pull: { trustedDevices: deviceId }, isTrusted: false }
     );
 
     if (!device) {
