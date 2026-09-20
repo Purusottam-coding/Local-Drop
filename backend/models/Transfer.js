@@ -57,4 +57,7 @@ const transferSchema = new mongoose.Schema(
   }
 );
 
+// Auto-expire transfer history after 24 hours (86,400 seconds) if not cleared manually
+transferSchema.index({ createdAt: 1 }, { expireAfterSeconds: 86400 });
+
 module.exports = mongoose.model("Transfer", transferSchema);

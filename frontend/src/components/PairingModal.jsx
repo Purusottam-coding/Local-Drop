@@ -53,7 +53,7 @@ export default function PairingModal({
               Decline
             </button>
             <button className="btn btn-primary" style={{ flex: 1, fontWeight: 600 }} onClick={onAccept}>
-              Accept & Trust
+              Accept & Connect
             </button>
           </div>
         </div>

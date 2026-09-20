@@ -4,7 +4,22 @@ export default function HistoryPanel({ history, onClear }) {
   return (
     <div className="panel">
       <div className="panel-header">
-        <h2>History</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <h2 style={{ margin: 0 }}>History</h2>
+          <span
+            style={{
+              fontSize: '11px',
+              padding: '2px 7px',
+              borderRadius: '12px',
+              background: 'var(--gray-100)',
+              color: 'var(--gray-500)',
+              fontWeight: 500,
+            }}
+            title="Transfers are automatically kept up to 24 hours unless cleared manually"
+          >
+            24h
+          </span>
+        </div>
         {history.length > 0 && (
           <button className="btn-ghost" onClick={onClear}>Clear</button>
         )}

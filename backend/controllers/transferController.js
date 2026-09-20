@@ -6,7 +6,10 @@ const Transfer = require("../models/Transfer");
 const getTransfers = async (req, res) => {
   try {
     const { deviceId, status, limit = 50 } = req.query;
-    const filter = {};
+    const past24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const filter = {
+      createdAt: { $gte: past24h },
+    };
 
     if (deviceId) {
       filter.$or = [

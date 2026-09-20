@@ -37,20 +37,23 @@ export default function App() {
   const [incomingPairing, setIncomingPairing] = useState(null)
   const [pendingPairing, setPendingPairing] = useState(null)
 
-  // Load transfer history from MongoDB
+  // Load transfer history from MongoDB (kept up to 24 hours)
   const loadHistory = useCallback(async () => {
     try {
       const res = await transferApi.getTransfers()
       const records = res.data || []
-      const entries = records.map((t) => ({
-        name: t.files && t.files[0] ? t.files[0].name : 'File Transfer',
-        size: t.files && t.files[0] ? t.files[0].size : 0,
-        direction: 'sent',
-        peer: t.receiver?.name || t.sender?.name || '–',
-        ts: new Date(t.requestedAt || t.createdAt).getTime(),
-        status: t.status,
-        fileCount: t.files ? t.files.length : 1,
-      }))
+      const past24h = Date.now() - 24 * 60 * 60 * 1000
+      const entries = records
+        .map((t) => ({
+          name: t.files && t.files[0] ? t.files[0].name : 'File Transfer',
+          size: t.files && t.files[0] ? t.files[0].size : 0,
+          direction: 'sent',
+          peer: t.receiver?.name || t.sender?.name || '–',
+          ts: new Date(t.requestedAt || t.createdAt).getTime(),
+          status: t.status,
+          fileCount: t.files ? t.files.length : 1,
+        }))
+        .filter((entry) => entry.ts >= past24h)
       setHistory(entries)
     } catch (err) {
       console.warn('Could not load history from API:', err.message)
@@ -139,7 +142,7 @@ export default function App() {
     socket.on('transfer:request', ({ from, files, transferId }) => {
       playChime('incoming')
       if (trustedDeviceIds.includes(from.deviceId)) {
-        showToast(`Auto-accepting transfer from trusted device: ${from.name}`, 'info')
+        showToast(`Auto-accepting transfer from connected device: ${from.name}`, 'info')
         acceptTransfer({ from, files, transferId })
       } else {
         setIncomingRequest({ from, files, transferId })
@@ -164,16 +167,19 @@ export default function App() {
       playChime('incoming')
       setIncomingText(data)
       showToast(`Incoming text from ${data.from?.name || 'Peer'}!`, 'info')
-      setHistory((prev) => [
-        {
-          name: `Text: "${data.text.slice(0, 24)}${data.text.length > 24 ? '…' : ''}"`,
-          size: new Blob([data.text]).size,
-          direction: 'received',
-          peer: data.from?.name || 'Peer',
-          ts: Date.now(),
-        },
-        ...prev,
-      ])
+      const past24h = Date.now() - 24 * 60 * 60 * 1000
+      setHistory((prev) =>
+        [
+          {
+            name: `Text: "${data.text.slice(0, 24)}${data.text.length > 24 ? '…' : ''}"`,
+            size: new Blob([data.text]).size,
+            direction: 'received',
+            peer: data.from?.name || 'Peer',
+            ts: Date.now(),
+          },
+          ...prev,
+        ].filter((item) => item.ts >= past24h)
+      )
     })
 
     // Pairing Socket Handshake
@@ -193,7 +199,7 @@ export default function App() {
       setTrustedDeviceIds((prev) =>
         prev.includes(pairedDevice.deviceId) ? prev : [...prev, pairedDevice.deviceId]
       )
-      showToast(`✓ Paired & trusted with ${pairedDevice.name}!`, 'success')
+      showToast(`✓ Connected with ${pairedDevice.name}!`, 'success')
     })
 
     socket.on('pairing:rejected', ({ reason }) => {
@@ -436,19 +442,20 @@ export default function App() {
       if (shouldTrust) {
         await deviceApi.addTrustedDevice(myDevice.deviceId, peer.deviceId)
         setTrustedDeviceIds((prev) => [...prev, peer.deviceId])
-        showToast(`Marked ${peer.name} as trusted`, 'success')
+        showToast(`Connected with ${peer.name}`, 'success')
       } else {
         await deviceApi.removeTrustedDevice(myDevice.deviceId, peer.deviceId)
         setTrustedDeviceIds((prev) => prev.filter((id) => id !== peer.deviceId))
-        showToast(`Removed trust for ${peer.name}`, 'info')
+        showToast(`Disconnected from ${peer.name}`, 'info')
       }
     } catch {
-      showToast('Failed to update trust in database', 'error')
+      showToast('Failed to update connection status in database', 'error')
     }
   }
 
   function addToHistory(entry) {
-    setHistory((prev) => [entry, ...prev])
+    const past24h = Date.now() - 24 * 60 * 60 * 1000
+    setHistory((prev) => [entry, ...prev].filter((item) => item.ts >= past24h))
   }
 
   const handleClearHistory = async () => {

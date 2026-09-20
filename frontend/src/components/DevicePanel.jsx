@@ -107,17 +107,21 @@ export default function DevicePanel({
                         border: 'none',
                         cursor: 'pointer',
                         fontSize: '10px',
-                        padding: '3px 6px',
+                        padding: '3px 8px',
                         background: 'var(--green-light)',
                         color: 'var(--green)',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
                       }}
-                      title="Trusted device (Click to untrust)"
+                      title="Connected device (Click to disconnect)"
                       onClick={(e) => {
                         e.stopPropagation()
                         onToggleTrust?.(peer, false)
                       }}
                     >
-                      ★ Trusted
+                      ● Connected
                     </button>
                   ) : (
                     <button
