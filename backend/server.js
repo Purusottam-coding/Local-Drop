@@ -8,6 +8,7 @@ const os = require("os");
 const connectDB = require("./config/db");
 const deviceRoutes = require("./routes/deviceRoutes");
 const transferRoutes = require("./routes/transferRoutes");
+const sessionRoutes = require("./routes/sessionRoutes");
 const setupSocketIO = require("./websocket/socketHandler");
 
 dotenv.config();
@@ -17,6 +18,7 @@ const server = http.createServer(app);
 
 // Initialize Socket.IO
 const io = new Server(server, {
+  maxHttpBufferSize: 1e8, // 100 MB buffer for temporary session files
   cors: {
     origin: "*",
     methods: ["GET", "POST", "PATCH", "DELETE"],
@@ -33,6 +35,7 @@ app.use(express.json());
 // Routes
 app.use("/api/devices", deviceRoutes);
 app.use("/api/transfers", transferRoutes);
+app.use("/api/sessions", sessionRoutes);
 
 // Test & Health Route
 app.get("/", (req, res) => {

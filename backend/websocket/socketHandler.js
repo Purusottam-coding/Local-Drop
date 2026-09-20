@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require("uuid");
 const Device = require("../models/Device");
 const Transfer = require("../models/Transfer");
+const Session = require("../models/Session");
 
 function setupSocketIO(io, getLANIp) {
   io.on("connection", (socket) => {
@@ -498,10 +499,203 @@ function setupSocketIO(io, getLANIp) {
       }
     });
 
-    // 7. Disconnect handling
+    // 7. Temporary File-Sharing Sessions
+    socket.on("session:join", async ({ sessionCode, deviceId, name }) => {
+      try {
+        const code = (sessionCode || "").trim().toUpperCase();
+        const roomKey = `session:${code}`;
+        socket.join(roomKey);
+
+        const session = await Session.findOne({ sessionCode: code });
+        if (session && session.status === "active" && session.expiresAt.getTime() > Date.now()) {
+          const idx = session.participants.findIndex((p) => p.deviceId === deviceId);
+          if (idx >= 0) {
+            session.participants[idx].socketId = socket.id;
+            session.participants[idx].name = name;
+          } else {
+            session.participants.push({
+              deviceId,
+              name,
+              socketId: socket.id,
+              isHost: session.creator.deviceId === deviceId,
+              joinedAt: new Date(),
+            });
+          }
+          await session.save();
+
+          const remainingSeconds = Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000));
+          const sessionData = {
+            ...session.toObject(),
+            remainingSeconds,
+          };
+
+          // Notify room with full session state
+          io.to(roomKey).emit("session:updated", sessionData);
+          console.log(`[Session Join] Device ${name} joined session ${code}`);
+        } else {
+          socket.emit("session:error", { message: "Session expired or not found" });
+        }
+      } catch (err) {
+        console.error("Error in session:join:", err);
+      }
+    });
+
+    socket.on("session:leave", async ({ sessionCode, deviceId }) => {
+      try {
+        const code = (sessionCode || "").trim().toUpperCase();
+        const roomKey = `session:${code}`;
+        socket.leave(roomKey);
+
+        const session = await Session.findOne({ sessionCode: code });
+        if (session) {
+          session.participants = session.participants.filter((p) => p.deviceId !== deviceId);
+          await session.save();
+
+          io.to(roomKey).emit("session:updated", {
+            ...session.toObject(),
+            remainingSeconds: Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000)),
+          });
+        }
+      } catch (err) {
+        console.error("Error in session:leave:", err);
+      }
+    });
+
+    socket.on("session:file-share", async ({ sessionCode, fileMeta }) => {
+      try {
+        const code = (sessionCode || "").trim().toUpperCase();
+        const roomKey = `session:${code}`;
+
+        const session = await Session.findOne({ sessionCode: code });
+        if (session && session.status === "active" && session.expiresAt.getTime() > Date.now()) {
+          session.files.push(fileMeta);
+          await session.save();
+
+          io.to(roomKey).emit("session:file-added", {
+            sessionCode: code,
+            file: fileMeta,
+            files: session.files,
+          });
+          console.log(`[Session File] Shared "${fileMeta.name}" in session ${code}`);
+        }
+      } catch (err) {
+        console.error("Error in session:file-share:", err);
+      }
+    });
+
+    // Relay binary file data to all participants in session room
+    socket.on("session:file-binary", async ({ sessionCode, fileId, name, size, type, buffer, senderName, senderDeviceId }) => {
+      try {
+        const code = (sessionCode || "").trim().toUpperCase();
+        const roomKey = `session:${code}`;
+
+        const session = await Session.findOne({ sessionCode: code });
+        if (session && session.status === "active" && session.expiresAt.getTime() > Date.now()) {
+          // Check if file metadata is already in session
+          if (!session.files.some((f) => f.fileId === fileId)) {
+            session.files.push({
+              fileId,
+              name,
+              size,
+              type: type || "",
+              senderName: senderName || "Member",
+              senderDeviceId: senderDeviceId || "",
+              uploadedAt: new Date(),
+            });
+            await session.save();
+          }
+
+          // Broadcast file payload with binary buffer to other participants in room
+          socket.to(roomKey).emit("session:file-received", {
+            sessionCode: code,
+            fileId,
+            name,
+            size,
+            type,
+            senderName,
+            senderDeviceId,
+            buffer,
+          });
+
+          // Also announce metadata update
+          io.to(roomKey).emit("session:file-added", {
+            sessionCode: code,
+            file: { fileId, name, size, type, senderName, senderDeviceId },
+            files: session.files,
+          });
+
+          console.log(`[Session Binary] Transferred "${name}" (${size} bytes) in session ${code}`);
+        }
+      } catch (err) {
+        console.error("Error in session:file-binary:", err);
+      }
+    });
+
+    // Request file on demand if peer missed the initial broadcast
+    socket.on("session:request-file", ({ sessionCode, fileId }) => {
+      const code = (sessionCode || "").trim().toUpperCase();
+      const roomKey = `session:${code}`;
+      socket.to(roomKey).emit("session:file-pull-request", {
+        sessionCode: code,
+        fileId,
+        requesterSocketId: socket.id,
+      });
+    });
+
+    // Uploader sends requested file to specific requester socket
+    socket.on("session:fulfill-file-request", ({ targetSocketId, fileId, name, size, type, buffer }) => {
+      if (targetSocketId) {
+        io.to(targetSocketId).emit("session:file-received", {
+          fileId,
+          name,
+          size,
+          type,
+          buffer,
+        });
+      }
+    });
+
+    socket.on("session:destroy", async ({ sessionCode, deviceId }) => {
+      try {
+        const code = (sessionCode || "").trim().toUpperCase();
+        const roomKey = `session:${code}`;
+
+        const session = await Session.findOne({ sessionCode: code });
+        if (session) {
+          if (deviceId && session.creator.deviceId !== deviceId) {
+            return socket.emit("session:error", { message: "Only the host can end this session" });
+          }
+          await Session.deleteOne({ sessionCode: code });
+          io.to(roomKey).emit("session:closed", {
+            sessionCode: code,
+            message: "Temporary session ended by the host.",
+          });
+          console.log(`[Session Destroyed] ${code}`);
+        }
+      } catch (err) {
+        console.error("Error in session:destroy:", err);
+      }
+    });
+
+    // 8. Disconnect handling
     socket.on("disconnect", async () => {
       console.log(`[Socket Disconnected] ID: ${socket.id}`);
       try {
+        // Clean up any session participation for this socket
+        const activeSessions = await Session.find({
+          "participants.socketId": socket.id,
+          status: "active",
+        });
+
+        for (const sess of activeSessions) {
+          sess.participants = sess.participants.filter((p) => p.socketId !== socket.id);
+          await sess.save();
+          io.to(`session:${sess.sessionCode}`).emit("session:updated", {
+            ...sess.toObject(),
+            remainingSeconds: Math.max(0, Math.floor((sess.expiresAt.getTime() - Date.now()) / 1000)),
+          });
+        }
+
         if (currentDeviceId) {
           const device = await Device.findOneAndUpdate(
             { deviceId: currentDeviceId },

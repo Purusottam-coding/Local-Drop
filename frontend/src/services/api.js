@@ -85,6 +85,41 @@ export const transferApi = {
 }
 
 /* -------------------------------------------------------------
+ * TEMPORARY SESSION API SERVICE
+ * ------------------------------------------------------------- */
+export const sessionApi = {
+  // Create a new temporary session
+  createSession: (data) => {
+    return apiClient.post('/sessions/create', data)
+  },
+
+  // Get session details and active files by sessionCode
+  getSession: (sessionCode) => {
+    return apiClient.get(`/sessions/${sessionCode}`)
+  },
+
+  // Join session
+  joinSession: (sessionCode, data) => {
+    return apiClient.post(`/sessions/${sessionCode}/join`, data)
+  },
+
+  // Leave session
+  leaveSession: (sessionCode, data) => {
+    return apiClient.post(`/sessions/${sessionCode}/leave`, data)
+  },
+
+  // Close/destroy session
+  closeSession: (sessionCode, data) => {
+    return apiClient.delete(`/sessions/${sessionCode}`, { data })
+  },
+
+  // Record a shared file metadata in session
+  addFile: (sessionCode, fileData) => {
+    return apiClient.post(`/sessions/${sessionCode}/files`, fileData)
+  },
+}
+
+/* -------------------------------------------------------------
  * HEALTH & DIAGNOSTICS API
  * ------------------------------------------------------------- */
 export const healthApi = {

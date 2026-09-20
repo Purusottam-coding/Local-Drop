@@ -12,6 +12,7 @@ import IncomingTextModal from './components/IncomingTextModal'
 import PairingModal from './components/PairingModal'
 import QRCodeModal from './components/QRCodeModal'
 import ReceivedFilesModal from './components/ReceivedFilesModal'
+import SessionModal from './components/SessionModal'
 
 export default function App() {
   const { socket, peers, myDevice, webrtcManager, connected } = useSocket()
@@ -24,6 +25,12 @@ export default function App() {
   const [history, setHistory] = useState([])
   const [qrOpen, setQrOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState('devices') // 'devices' | 'transfer' | 'history'
+
+  // Temporary file-sharing session states
+  const [sessionOpen, setSessionOpen] = useState(false)
+  const [activeSession, setActiveSession] = useState(null)
+  const [sessionBlobs, setSessionBlobs] = useState({})
+  const [sessionParamCode, setSessionParamCode] = useState('')
 
   // Pairing states
   const [trustedDeviceIds, setTrustedDeviceIds] = useState([])
@@ -78,6 +85,14 @@ export default function App() {
     if (pairDeviceId) {
       showToast(`Connecting with ${pairName || 'Nearby Device'} via QR...`, 'info')
       socket.emit('qr:pair', { hostDeviceId: pairDeviceId, pin: pairPin })
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+
+    const sessionCode = params.get('session')
+    if (sessionCode) {
+      setSessionParamCode(sessionCode.toUpperCase())
+      setSessionOpen(true)
+      showToast(`Opening temporary session ${sessionCode.toUpperCase()}…`, 'info')
       window.history.replaceState({}, document.title, window.location.pathname)
     }
   }, [socket, connected, showToast])
@@ -215,6 +230,69 @@ export default function App() {
       showToast(message || 'QR pairing failed', 'error')
     })
 
+    // Temporary session socket listeners
+    socket.on('session:updated', (data) => {
+      setActiveSession((prev) => {
+        if (!prev || prev.sessionCode === data.sessionCode) {
+          return {
+            ...prev,
+            ...data,
+            files: data.files || prev?.files || [],
+            participants: data.participants || prev?.participants || [],
+          }
+        }
+        return prev
+      })
+    })
+
+    socket.on('session:file-added', ({ file, files }) => {
+      setActiveSession((prev) => (prev ? { ...prev, files: files || [...(prev.files || []), file] } : null))
+    })
+
+    socket.on('session:file-received', ({ fileId, name, type, buffer }) => {
+      if (buffer) {
+        const blob = new Blob([buffer], { type: type || 'application/octet-stream' })
+        setSessionBlobs((prev) => ({
+          ...prev,
+          [fileId]: blob,
+          [name]: blob,
+        }))
+        playChime('incoming')
+        showToast(`New file received in session: ${name}`, 'info')
+      }
+    })
+
+    socket.on('session:file-pull-request', ({ fileId, requesterSocketId }) => {
+      setSessionBlobs((currentBlobs) => {
+        const fileObj = currentBlobs[fileId]
+        if (fileObj && socket) {
+          fileObj.arrayBuffer().then((buf) => {
+            socket.emit('session:fulfill-file-request', {
+              targetSocketId: requesterSocketId,
+              fileId,
+              name: fileObj.name || 'file',
+              size: fileObj.size,
+              type: fileObj.type,
+              buffer: buf,
+            })
+          })
+        }
+        return currentBlobs
+      })
+    })
+
+    socket.on('session:closed', ({ message }) => {
+      playChime('error')
+      showToast(message || 'Temporary session ended', 'info')
+      setActiveSession(null)
+      setSessionBlobs({})
+    })
+
+    socket.on('session:error', ({ message }) => {
+      playChime('error')
+      showToast(message || 'Session error', 'error')
+    })
+
     return () => {
       socket.off('transfer:request')
       socket.off('transfer:accepted')
@@ -226,6 +304,12 @@ export default function App() {
       socket.off('pairing:rejected')
       socket.off('qr:paired')
       socket.off('qr:error')
+      socket.off('session:updated')
+      socket.off('session:file-added')
+      socket.off('session:file-received')
+      socket.off('session:file-pull-request')
+      socket.off('session:closed')
+      socket.off('session:error')
     }
   }, [socket, trustedDeviceIds, acceptTransfer, showToast])
 
@@ -379,7 +463,11 @@ export default function App() {
 
   return (
     <>
-      <Navbar onOpenQR={() => setQrOpen(true)} />
+      <Navbar
+        onOpenQR={() => setQrOpen(true)}
+        onOpenSession={() => setSessionOpen(true)}
+        activeSession={activeSession}
+      />
 
       <main className="app-layout">
         <div className={`panel-wrapper panel-devices ${mobileTab === 'devices' ? 'active-mobile' : ''}`}>
@@ -494,6 +582,19 @@ export default function App() {
         myDevice={myDevice}
         isOpen={qrOpen}
         onClose={() => setQrOpen(false)}
+      />
+
+      {/* Temporary File-Sharing Session Modal */}
+      <SessionModal
+        isOpen={sessionOpen}
+        onClose={() => setSessionOpen(false)}
+        myDevice={myDevice}
+        activeSession={activeSession}
+        setActiveSession={setActiveSession}
+        socket={socket}
+        sessionBlobs={sessionBlobs}
+        setSessionBlobs={setSessionBlobs}
+        prefilledCode={sessionParamCode}
       />
     </>
   )

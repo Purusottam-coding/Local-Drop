@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useSocket } from '../context/SocketContext'
 import { isSoundEnabled, setSoundEnabled, playChime } from '../utils/audioFeedback'
 
-export default function Navbar({ onOpenQR }) {
+export default function Navbar({ onOpenQR, onOpenSession, activeSession }) {
   const { connected, myDevice, updateDeviceName } = useSocket()
   const [editing, setEditing] = useState(false)
   const [nameInput, setNameInput] = useState('')
@@ -82,6 +82,43 @@ export default function Navbar({ onOpenQR }) {
 
       {/* Actions and connection status */}
       <div className="nav-actions">
+        {/* Temporary File-Sharing Session Button */}
+        <button
+          type="button"
+          className={`btn ${activeSession ? 'btn-primary' : 'btn-outline'} nav-session-btn`}
+          onClick={onOpenSession}
+          title={activeSession ? `Active Session: ${activeSession.sessionCode}` : 'Temporary File-Sharing Session'}
+          style={{
+            fontSize: '12px',
+            padding: '6px 12px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontWeight: 600,
+          }}
+        >
+          {activeSession ? (
+            <>
+              <span
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: '#4ade80',
+                  boxShadow: '0 0 6px #4ade80',
+                  display: 'inline-block',
+                }}
+              />
+              <span>{activeSession.sessionCode}</span>
+            </>
+          ) : (
+            <>
+              <span>⚡</span>
+              <span className="nav-session-label">Session</span>
+            </>
+          )}
+        </button>
+
         <button
           type="button"
           className="btn btn-outline nav-qr-btn"
