@@ -44,9 +44,6 @@ app.get("/", (req, res) => {
   });
 });
 
-// Setup WebSocket / WebRTC Signaling
-setupSocketIO(io);
-
 // Utility to get local LAN IPv4
 function getLANIp() {
   const ifaces = os.networkInterfaces();
@@ -61,6 +58,19 @@ function getLANIp() {
 }
 
 const PORT = process.env.PORT || 7000;
+
+// Network info route for QR code & mobile device discovery
+app.get("/api/network-info", (_req, res) => {
+  const lanIp = getLANIp();
+  res.json({
+    success: true,
+    lanIp,
+    port: PORT,
+  });
+});
+
+// Setup WebSocket / WebRTC Signaling
+setupSocketIO(io, getLANIp);
 
 server.listen(PORT, "0.0.0.0", () => {
   const lanIp = getLANIp();

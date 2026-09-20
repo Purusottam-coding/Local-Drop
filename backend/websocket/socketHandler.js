@@ -2,7 +2,7 @@ const { v4: uuidv4 } = require("uuid");
 const Device = require("../models/Device");
 const Transfer = require("../models/Transfer");
 
-function setupSocketIO(io) {
+function setupSocketIO(io, getLANIp) {
   io.on("connection", (socket) => {
     let currentDeviceId = null;
 
@@ -20,6 +20,7 @@ function setupSocketIO(io) {
         const deviceId = payload.deviceId || uuidv4();
         const name = payload.name || `Device-${deviceId.slice(0, 5)}`;
         const type = payload.type || "browser";
+        const serverLanIp = getLANIp ? getLANIp() : "127.0.0.1";
 
         currentDeviceId = deviceId;
 
@@ -54,9 +55,15 @@ function setupSocketIO(io) {
           name: device.name,
           type: device.type,
           ip: device.ip,
+          lanIp: serverLanIp,
           isTrusted: device.isTrusted,
         });
-        socket.emit("device:info", { name: device.name, ip: device.ip, deviceId: device.deviceId });
+        socket.emit("device:info", {
+          name: device.name,
+          ip: device.ip,
+          lanIp: serverLanIp,
+          deviceId: device.deviceId,
+        });
 
         // Broadcast to everyone else that this device is online
         const peerPayload = formatPeer(device);
@@ -410,6 +417,84 @@ function setupSocketIO(io) {
         io.to(senderSocketId).emit("pairing:rejected", {
           reason: reason || "Pairing request was declined",
         });
+      }
+    });
+
+    // 6.2 Instant QR Code Pairing Handshake
+    socket.on("qr:pair", async ({ hostDeviceId, pin }) => {
+      try {
+        console.log(`[QR Pair Request] Scanner socket ${socket.id} attempting to pair with host ${hostDeviceId}`);
+
+        let scannerDevice = await Device.findOne({ socketId: socket.id });
+        if (!scannerDevice && currentDeviceId) {
+          scannerDevice = await Device.findOne({ deviceId: currentDeviceId });
+        }
+
+        const hostDevice = await Device.findOne({ deviceId: hostDeviceId });
+
+        if (!hostDevice) {
+          return socket.emit("qr:error", { message: "Host device not found or offline" });
+        }
+
+        const scannerId = scannerDevice ? scannerDevice.deviceId : currentDeviceId;
+
+        if (scannerId && hostDevice.deviceId) {
+          // Mutually add to trusted devices in MongoDB
+          await Device.findOneAndUpdate(
+            { deviceId: hostDevice.deviceId },
+            { $addToSet: { trustedDevices: scannerId } }
+          );
+
+          await Device.findOneAndUpdate(
+            { deviceId: scannerId },
+            { $addToSet: { trustedDevices: hostDevice.deviceId } }
+          );
+
+          const scannerPayload = {
+            id: socket.id,
+            socketId: socket.id,
+            deviceId: scannerDevice?.deviceId || scannerId,
+            name: scannerDevice?.name || "Scanner Device",
+            type: scannerDevice?.type || "mobile",
+            ip: clientIp,
+            isTrusted: true,
+          };
+
+          const hostPayload = {
+            id: hostDevice.socketId,
+            socketId: hostDevice.socketId,
+            deviceId: hostDevice.deviceId,
+            name: hostDevice.name,
+            type: hostDevice.type,
+            ip: hostDevice.ip,
+            isTrusted: true,
+          };
+
+          // Notify host device that QR was scanned and paired
+          if (hostDevice.socketId) {
+            io.to(hostDevice.socketId).emit("qr:paired", {
+              pairedDevice: scannerPayload,
+              message: `✓ Connected to ${scannerPayload.name} via QR scan!`,
+            });
+            io.to(hostDevice.socketId).emit("pairing:success", {
+              pairedDevice: scannerPayload,
+            });
+          }
+
+          // Notify scanner device that pairing succeeded
+          socket.emit("qr:paired", {
+            pairedDevice: hostPayload,
+            message: `✓ Connected to ${hostPayload.name} via QR scan!`,
+          });
+          socket.emit("pairing:success", {
+            pairedDevice: hostPayload,
+          });
+
+          console.log(`[QR Pair Success] Host: ${hostDevice.name} <-> Scanner: ${scannerPayload.name}`);
+        }
+      } catch (err) {
+        console.error("Error in qr:pair:", err);
+        socket.emit("qr:error", { message: "QR pairing failed" });
       }
     });
 

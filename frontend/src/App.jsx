@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSocket } from './context/SocketContext'
 import { useToast } from './context/ToastContext'
 import { transferApi, deviceApi } from './services/api'
+import { playChime } from './utils/audioFeedback'
 import Navbar from './components/Navbar'
 import DevicePanel from './components/DevicePanel'
 import TransferPanel from './components/TransferPanel'
@@ -119,6 +120,7 @@ export default function App() {
 
     // Incoming transfer request from another peer
     socket.on('transfer:request', ({ from, files, transferId }) => {
+      playChime('incoming')
       if (trustedDeviceIds.includes(from.deviceId)) {
         showToast(`Auto-accepting transfer from trusted device: ${from.name}`, 'info')
         acceptTransfer({ from, files, transferId })
@@ -136,11 +138,13 @@ export default function App() {
 
     // Our transfer request was rejected
     socket.on('transfer:rejected', ({ by, reason }) => {
+      playChime('error')
       showToast(`${by?.name || 'Peer'} declined: ${reason || 'Transfer rejected'}`, 'error')
     })
 
     // Received text or clipboard message from a peer
     socket.on('text:receive', (data) => {
+      playChime('incoming')
       setIncomingText(data)
       showToast(`Incoming text from ${data.from?.name || 'Peer'}!`, 'info')
       setHistory((prev) => [
@@ -157,6 +161,7 @@ export default function App() {
 
     // Pairing Socket Handshake
     socket.on('pairing:incoming', (data) => {
+      playChime('incoming')
       setIncomingPairing(data)
     })
 
@@ -165,6 +170,7 @@ export default function App() {
     })
 
     socket.on('pairing:success', ({ pairedDevice }) => {
+      playChime('paired')
       setIncomingPairing(null)
       setPendingPairing(null)
       setTrustedDeviceIds((prev) =>
@@ -174,6 +180,7 @@ export default function App() {
     })
 
     socket.on('pairing:rejected', ({ reason }) => {
+      playChime('error')
       setIncomingPairing(null)
       setPendingPairing(null)
       showToast(`Pairing declined: ${reason || 'Rejected by peer'}`, 'info')
@@ -181,6 +188,7 @@ export default function App() {
 
     // Instant QR code pairing success handler
     socket.on('qr:paired', ({ pairedDevice, message }) => {
+      playChime('paired')
       setIncomingPairing(null)
       setPendingPairing(null)
       setQrOpen(false)
@@ -201,6 +209,7 @@ export default function App() {
     })
 
     socket.on('qr:error', ({ message }) => {
+      playChime('error')
       showToast(message || 'QR pairing failed', 'error')
     })
 
@@ -267,6 +276,7 @@ export default function App() {
 
     const unsubAllComplete = webrtcManager.on('allComplete', ({ isSender }) => {
       if (!isSender) {
+        playChime('success')
         showToast('All files received and saved!', 'success')
         loadHistory()
         // Automatically close the receiving overlay after a brief delay

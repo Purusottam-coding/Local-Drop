@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useSocket } from '../context/SocketContext'
 import { useToast } from '../context/ToastContext'
+import { playChime } from '../utils/audioFeedback'
 import DropZone from './DropZone'
 import FileQueue from './FileQueue'
 import TransferProgress from './TransferProgress'
@@ -65,6 +66,7 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDe
 
     const unsubAllComplete = webrtcManager.on('allComplete', ({ isSender }) => {
       if (isSender) {
+        playChime('success')
         showToast('All files sent successfully!', 'success')
         onTransferCompleted?.()
         setTimeout(() => {
@@ -77,6 +79,7 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDe
 
     const unsubError = webrtcManager.on('error', (err) => {
       console.error('[WebRTC Transfer Error]:', err)
+      playChime('error')
       showToast('Transfer failed over WebRTC', 'error')
       setState(STATE.IDLE)
     })
@@ -124,6 +127,7 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDe
       files: fileMeta,
     })
 
+    playChime('send')
     setState(STATE.WAITING)
     showToast(`Waiting for ${selectedPeer.name} to accept…`, 'info')
 

@@ -1,10 +1,19 @@
 import { useState } from 'react'
 import { useSocket } from '../context/SocketContext'
+import { isSoundEnabled, setSoundEnabled, playChime } from '../utils/audioFeedback'
 
 export default function Navbar({ onOpenQR }) {
   const { connected, myDevice, updateDeviceName } = useSocket()
   const [editing, setEditing] = useState(false)
   const [nameInput, setNameInput] = useState('')
+  const [soundOn, setSoundOn] = useState(isSoundEnabled)
+
+  const toggleSound = () => {
+    const next = !soundOn
+    setSoundOn(next)
+    setSoundEnabled(next)
+    if (next) playChime('paired')
+  }
 
   const startEdit = () => {
     setNameInput(myDevice.name)
@@ -86,6 +95,16 @@ export default function Navbar({ onOpenQR }) {
             <rect x="3" y="14" width="7" height="7" />
           </svg>
           <span className="nav-qr-label">Show QR</span>
+        </button>
+
+        <button
+          type="button"
+          className="btn-icon-sm"
+          onClick={toggleSound}
+          title={soundOn ? 'Sound alerts enabled (click to mute)' : 'Sound alerts muted (click to unmute)'}
+          style={{ border: 'none', background: 'none', fontSize: '15px', cursor: 'pointer', padding: '2px' }}
+        >
+          {soundOn ? '🔔' : '🔕'}
         </button>
 
         <div className="nav-status">
