@@ -13,7 +13,15 @@ const STATE = {
   TRANSFERRING: 'transferring',
 }
 
-export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDevices, onFileDone, onTransferCompleted }) {
+export default function TransferPanel({
+  selectedPeer,
+  isPaired,
+  onPairRequest,
+  onDisconnect,
+  onSwitchToDevices,
+  onFileDone,
+  onTransferCompleted,
+}) {
   const { socket, webrtcManager } = useSocket()
   const { showToast } = useToast()
 
@@ -114,6 +122,10 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDe
   // Send transfer request via socket signaling
   function sendRequest() {
     if (!selectedPeer || queuedFiles.length === 0) return
+    if (!isPaired) {
+      showToast(`You must pair with ${selectedPeer.name} before sending files.`, 'error')
+      return
+    }
 
     const fileMeta = queuedFiles.map((f) => ({
       name: f.name,
@@ -207,7 +219,7 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDe
             <div className="target-status">
               {state === STATE.WAITING && 'Waiting for acceptance…'}
               {state === STATE.TRANSFERRING && 'P2P WebRTC Transferring…'}
-              {state === STATE.IDLE && 'Ready to send'}
+              {state === STATE.IDLE && (isPaired ? '● Connected · Ready to send' : '🔒 Not Paired · Pairing Required')}
             </div>
           </div>
           <button className="btn btn-outline target-disconnect-btn" onClick={onDisconnect}>
@@ -215,84 +227,128 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDe
           </button>
         </div>
 
-        {/* Tab Switcher: Files vs Text/Clipboard */}
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--gray-200)', background: 'var(--white)', padding: '0 16px' }}>
-          <button
-            type="button"
+        {!isPaired ? (
+          <div
             style={{
-              padding: '10px 16px',
-              border: 'none',
-              borderBottom: activeTab === 'files' ? '2px solid var(--blue)' : '2px solid transparent',
-              background: 'none',
-              color: activeTab === 'files' ? 'var(--blue)' : 'var(--gray-500)',
-              fontWeight: 600,
-              cursor: 'pointer',
-              fontSize: '13px',
+              padding: '36px 20px',
+              textAlign: 'center',
+              background: 'var(--white)',
+              borderRadius: '10px',
+              margin: '24px 16px',
+              border: '1px dashed var(--gray-300)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '12px',
             }}
-            onClick={() => setActiveTab('files')}
           >
-            📁 Files
-          </button>
-          <button
-            type="button"
-            style={{
-              padding: '10px 16px',
-              border: 'none',
-              borderBottom: activeTab === 'text' ? '2px solid var(--blue)' : '2px solid transparent',
-              background: 'none',
-              color: activeTab === 'text' ? 'var(--blue)' : 'var(--gray-500)',
-              fontWeight: 600,
-              cursor: 'pointer',
-              fontSize: '13px',
-            }}
-            onClick={() => setActiveTab('text')}
-          >
-            📋 Text & Clipboard
-          </button>
-        </div>
+            <div style={{ fontSize: '40px', lineHeight: 1 }}>🔐</div>
+            <h3 style={{ margin: 0, fontSize: '17px', color: 'var(--gray-900)' }}>
+              Pairing Required to Transfer
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: 0, maxWidth: '320px', lineHeight: 1.5 }}>
+              Click <strong>Pair</strong> to connect with <strong>{selectedPeer.name}</strong>. Once they accept, you will be able to send and receive files, folders, and clipboard text.
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{
+                fontSize: '14px',
+                padding: '10px 22px',
+                fontWeight: 600,
+                marginTop: '6px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+              onClick={() => onPairRequest && onPairRequest(selectedPeer)}
+            >
+              <span>🤝</span>
+              <span>Pair with {selectedPeer.name}</span>
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Tab Switcher: Files vs Text/Clipboard */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--gray-200)', background: 'var(--white)', padding: '0 16px' }}>
+              <button
+                type="button"
+                style={{
+                  padding: '10px 16px',
+                  border: 'none',
+                  borderBottom: activeTab === 'files' ? '2px solid var(--blue)' : '2px solid transparent',
+                  background: 'none',
+                  color: activeTab === 'files' ? 'var(--blue)' : 'var(--gray-500)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                }}
+                onClick={() => setActiveTab('files')}
+              >
+                📁 Files
+              </button>
+              <button
+                type="button"
+                style={{
+                  padding: '10px 16px',
+                  border: 'none',
+                  borderBottom: activeTab === 'text' ? '2px solid var(--blue)' : '2px solid transparent',
+                  background: 'none',
+                  color: activeTab === 'text' ? 'var(--blue)' : 'var(--gray-500)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                }}
+                onClick={() => setActiveTab('text')}
+              >
+                📋 Text & Clipboard
+              </button>
+            </div>
 
-        <div className="transfer-content">
-          {activeTab === 'text' ? (
-            <TextSharePanel
-              selectedPeer={selectedPeer}
-              onTextSent={onFileDone}
-            />
-          ) : (
-            <>
-              {/* IDLE: drop zone and file queue */}
-              {state === STATE.IDLE && (
+            <div className="transfer-content">
+              {activeTab === 'text' ? (
+                <TextSharePanel
+                  selectedPeer={selectedPeer}
+                  onTextSent={onFileDone}
+                />
+              ) : (
                 <>
-                  <DropZone onFiles={addFiles} />
-                  <FileQueue
-                    files={queuedFiles}
-                    onRemove={removeFile}
-                    onClear={clearFiles}
-                    onSend={sendRequest}
-                  />
+                  {/* IDLE: drop zone and file queue */}
+                  {state === STATE.IDLE && (
+                    <>
+                      <DropZone onFiles={addFiles} />
+                      <FileQueue
+                        files={queuedFiles}
+                        onRemove={removeFile}
+                        onClear={clearFiles}
+                        onSend={sendRequest}
+                      />
+                    </>
+                  )}
+
+                  {/* WAITING: acceptance spinner */}
+                  {state === STATE.WAITING && (
+                    <div className="waiting">
+                      <div className="waiting-spinner" />
+                      <p>Waiting for {selectedPeer.name} to accept the transfer…</p>
+                      <button className="btn-ghost" onClick={() => setState(STATE.IDLE)}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {/* TRANSFERRING: real WebRTC progress */}
+                  {state === STATE.TRANSFERRING && (
+                    <TransferProgress
+                      progressItems={progressItems}
+                      title="Sending Files via WebRTC"
+                    />
+                  )}
                 </>
               )}
-
-              {/* WAITING: acceptance spinner */}
-              {state === STATE.WAITING && (
-                <div className="waiting">
-                  <div className="waiting-spinner" />
-                  <p>Waiting for {selectedPeer.name} to accept the transfer…</p>
-                  <button className="btn-ghost" onClick={() => setState(STATE.IDLE)}>
-                    Cancel
-                  </button>
-                </div>
-              )}
-
-              {/* TRANSFERRING: real WebRTC progress */}
-              {state === STATE.TRANSFERRING && (
-                <TransferProgress
-                  progressItems={progressItems}
-                  title="Sending Files via WebRTC"
-                />
-              )}
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

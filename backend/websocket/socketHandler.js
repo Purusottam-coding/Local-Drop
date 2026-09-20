@@ -25,7 +25,7 @@ function setupSocketIO(io, getLANIp) {
 
         currentDeviceId = deviceId;
 
-        // Upsert device in MongoDB
+        // Upsert device in MongoDB (start with clean paired sessions for this new connection)
         const device = await Device.findOneAndUpdate(
           { deviceId },
           {
@@ -34,6 +34,8 @@ function setupSocketIO(io, getLANIp) {
             ip: clientIp,
             socketId: socket.id,
             isOnline: true,
+            trustedDevices: [],
+            isTrusted: false,
             lastSeen: new Date(),
           },
           { new: true, upsert: true }
@@ -171,6 +173,22 @@ function setupSocketIO(io, getLANIp) {
 
         if (!receiver && !targetSocketId) {
           return socket.emit("transfer:error", { message: "Target device not found or offline" });
+        }
+
+        // Enforce: only able to send/receive if paired and accepted
+        const isPaired =
+          sender &&
+          receiver &&
+          sender.trustedDevices &&
+          sender.trustedDevices.includes(receiver.deviceId) &&
+          receiver.trustedDevices &&
+          receiver.trustedDevices.includes(sender.deviceId);
+
+        if (!isPaired) {
+          return socket.emit("transfer:rejected", {
+            by: receiver ? { name: receiver.name, socketId: receiver.socketId } : null,
+            reason: "Devices must be paired before transferring files. Please click Pair first.",
+          });
         }
 
         const receiverSocketId = receiver ? receiver.socketId : targetSocketId;
@@ -747,33 +765,49 @@ function setupSocketIO(io, getLANIp) {
           });
         }
 
-        if (currentDeviceId) {
-          const device = await Device.findOneAndUpdate(
-            { deviceId: currentDeviceId },
-            { isOnline: false, socketId: null, lastSeen: new Date() },
-            { new: true }
-          );
-
-          if (device) {
-            const offlinePayload = { deviceId: device.deviceId, name: device.name, id: socket.id };
-            io.emit("device:offline", offlinePayload);
-            io.emit("peer:left", offlinePayload);
-            console.log(`[Device Offline] ${device.name}`);
-          }
-        } else {
-          // Find device by socketId
-          const device = await Device.findOneAndUpdate(
+        // Find the disconnecting device
+        const disconnectingDev = await Device.findOne({
+          $or: [
+            ...(currentDeviceId ? [{ deviceId: currentDeviceId }] : []),
             { socketId: socket.id },
-            { isOnline: false, socketId: null, lastSeen: new Date() },
-            { new: true }
-          );
+          ],
+        });
 
-          if (device) {
-            const offlinePayload = { deviceId: device.deviceId, name: device.name, id: socket.id };
-            io.emit("device:offline", offlinePayload);
-            io.emit("peer:left", offlinePayload);
-            console.log(`[Device Offline] ${device.name}`);
+        if (disconnectingDev) {
+          const devId = disconnectingDev.deviceId;
+
+          // Find ALL devices paired with this device and disconnect them mutually
+          const pairedDevices = await Device.find({ trustedDevices: devId });
+          for (const pairedDev of pairedDevices) {
+            await Device.findOneAndUpdate(
+              { deviceId: pairedDev.deviceId },
+              { $pull: { trustedDevices: devId }, isTrusted: false }
+            );
+
+            if (pairedDev.socketId) {
+              io.to(pairedDev.socketId).emit("pairing:disconnected", {
+                disconnectedBy: {
+                  deviceId: devId,
+                  name: disconnectingDev.name,
+                },
+                targetDeviceId: devId,
+                reason: "Peer closed their tab",
+              });
+            }
           }
+
+          // Clear this device's own trustedDevices and mark offline
+          disconnectingDev.trustedDevices = [];
+          disconnectingDev.isTrusted = false;
+          disconnectingDev.isOnline = false;
+          disconnectingDev.socketId = null;
+          disconnectingDev.lastSeen = new Date();
+          await disconnectingDev.save();
+
+          const offlinePayload = { deviceId: disconnectingDev.deviceId, name: disconnectingDev.name, id: socket.id };
+          io.emit("device:offline", offlinePayload);
+          io.emit("peer:left", offlinePayload);
+          console.log(`[Device Offline & Paired Sessions Cleared] ${disconnectingDev.name}`);
         }
       } catch (err) {
         console.error("Error updating offline device status:", err);

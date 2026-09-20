@@ -140,12 +140,18 @@ export default function App() {
 
     // Incoming transfer request from another peer
     socket.on('transfer:request', ({ from, files, transferId }) => {
-      playChime('incoming')
       if (trustedDeviceIds.includes(from.deviceId)) {
+        playChime('incoming')
         showToast(`Auto-accepting transfer from connected device: ${from.name}`, 'info')
         acceptTransfer({ from, files, transferId })
       } else {
-        setIncomingRequest({ from, files, transferId })
+        // Enforce: only paired devices can send/receive files
+        playChime('error')
+        showToast(`${from.name} tried to transfer files, but devices are not paired.`, 'error')
+        socket.emit('transfer:reject', {
+          senderSocketId: from.socketId || from.id,
+          reason: 'You must pair before transferring files. Please click Pair first.',
+        })
       }
     })
 
@@ -510,6 +516,8 @@ export default function App() {
         <div className={`panel-wrapper panel-transfer ${mobileTab === 'transfer' ? 'active-mobile' : ''}`}>
           <TransferPanel
             selectedPeer={selectedPeer}
+            isPaired={selectedPeer ? trustedDeviceIds.includes(selectedPeer.deviceId) : false}
+            onPairRequest={handlePairRequest}
             onDisconnect={() => {
               setSelectedPeer(null)
               setMobileTab('devices')
