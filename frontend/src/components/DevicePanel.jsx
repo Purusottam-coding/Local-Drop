@@ -20,7 +20,13 @@ function getDeviceIcon(type = '') {
   )
 }
 
-export default function DevicePanel({ selectedPeer, onSelect }) {
+export default function DevicePanel({
+  selectedPeer,
+  onSelect,
+  trustedDeviceIds = [],
+  onPairRequest,
+  onToggleTrust,
+}) {
   const { myDevice, peers, refreshPeers } = useSocket()
   const [scanning, setScanning] = useState(false)
 
@@ -75,20 +81,69 @@ export default function DevicePanel({ selectedPeer, onSelect }) {
         )}
 
         {!scanning &&
-          peers.map((peer) => (
-            <li
-              key={peer.deviceId || peer.id}
-              className={`peer-item ${selectedPeer?.id === peer.id || selectedPeer?.deviceId === peer.deviceId ? 'selected' : ''}`}
-              onClick={() => onSelect(peer)}
-            >
-              <div className="peer-avatar">{getDeviceIcon(peer.type)}</div>
-              <div className="device-info">
-                <div className="name">{peer.name}</div>
-                <div className="ip">{peer.ip}</div>
-              </div>
-              <div className="online-dot" />
-            </li>
-          ))}
+          peers.map((peer) => {
+            const isTrusted =
+              trustedDeviceIds.includes(peer.deviceId) || peer.isTrusted
+
+            return (
+              <li
+                key={peer.deviceId || peer.id}
+                className={`peer-item ${selectedPeer?.id === peer.id || selectedPeer?.deviceId === peer.deviceId ? 'selected' : ''}`}
+                onClick={() => onSelect(peer)}
+              >
+                <div className="peer-avatar">{getDeviceIcon(peer.type)}</div>
+                <div className="device-info">
+                  <div className="name">{peer.name}</div>
+                  <div className="ip">{peer.ip}</div>
+                </div>
+
+                {/* Trusted badge / Pair button */}
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {isTrusted ? (
+                    <button
+                      type="button"
+                      className="badge sent"
+                      style={{
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '10px',
+                        padding: '3px 6px',
+                        background: 'var(--green-light)',
+                        color: 'var(--green)',
+                      }}
+                      title="Trusted device (Click to untrust)"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onToggleTrust?.(peer, false)
+                      }}
+                    >
+                      ★ Trusted
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{
+                        fontSize: '11px',
+                        padding: '2px 6px',
+                        color: 'var(--blue)',
+                        border: '1px solid var(--blue-light)',
+                        borderRadius: '4px',
+                      }}
+                      title="Pair with this device"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onPairRequest?.(peer)
+                      }}
+                    >
+                      Pair
+                    </button>
+                  )}
+                  <div className="online-dot" />
+                </div>
+              </li>
+            )
+          })}
       </ul>
     </div>
   )

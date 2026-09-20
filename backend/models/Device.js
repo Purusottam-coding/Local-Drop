@@ -38,6 +38,14 @@ const deviceSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    trustedDevices: {
+      type: [String],
+      default: [],
+    },
+    autoAcceptTrusted: {
+      type: Boolean,
+      default: true,
+    },
     pairingPin: {
       type: String,
       default: null,

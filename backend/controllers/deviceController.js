@@ -63,16 +63,17 @@ const registerDevice = async (req, res) => {
   }
 };
 
-// @desc    Update device properties (rename, trust status)
+// @desc    Update device properties (rename, trust status, autoAccept)
 // @route   PATCH /api/devices/:deviceId
 // @access  Public
 const updateDevice = async (req, res) => {
   try {
-    const { name, isTrusted, type } = req.body;
+    const { name, isTrusted, type, autoAcceptTrusted } = req.body;
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (isTrusted !== undefined) updateData.isTrusted = isTrusted;
     if (type !== undefined) updateData.type = type;
+    if (autoAcceptTrusted !== undefined) updateData.autoAcceptTrusted = autoAcceptTrusted;
 
     const device = await Device.findOneAndUpdate(
       { deviceId: req.params.deviceId },
@@ -90,9 +91,81 @@ const updateDevice = async (req, res) => {
   }
 };
 
+// @desc    Add a trusted device
+// @route   POST /api/devices/:deviceId/trust
+// @access  Public
+const addTrustedDevice = async (req, res) => {
+  try {
+    const { targetDeviceId } = req.body;
+    if (!targetDeviceId) {
+      return res.status(400).json({ success: false, message: "targetDeviceId is required" });
+    }
+
+    const device = await Device.findOneAndUpdate(
+      { deviceId: req.params.deviceId },
+      { $addToSet: { trustedDevices: targetDeviceId } },
+      { new: true }
+    );
+
+    if (!device) {
+      return res.status(404).json({ success: false, message: "Device not found" });
+    }
+
+    res.json({ success: true, data: device.trustedDevices });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Remove a trusted device
+// @route   DELETE /api/devices/:deviceId/trust/:targetDeviceId
+// @access  Public
+const removeTrustedDevice = async (req, res) => {
+  try {
+    const { deviceId, targetDeviceId } = req.params;
+
+    const device = await Device.findOneAndUpdate(
+      { deviceId },
+      { $pull: { trustedDevices: targetDeviceId } },
+      { new: true }
+    );
+
+    if (!device) {
+      return res.status(404).json({ success: false, message: "Device not found" });
+    }
+
+    res.json({ success: true, data: device.trustedDevices });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get trusted devices for this device
+// @route   GET /api/devices/:deviceId/trusted
+// @access  Public
+const getTrustedDevices = async (req, res) => {
+  try {
+    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, message: "Device not found" });
+    }
+
+    const trustedList = await Device.find({
+      deviceId: { $in: device.trustedDevices || [] },
+    }).select("deviceId name type ip isOnline lastSeen");
+
+    res.json({ success: true, data: trustedList });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getDevices,
   getDeviceById,
   registerDevice,
   updateDevice,
+  addTrustedDevice,
+  removeTrustedDevice,
+  getTrustedDevices,
 };

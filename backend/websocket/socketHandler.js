@@ -324,7 +324,96 @@ function setupSocketIO(io) {
       }
     });
 
-    // 5. Disconnect handling
+    // 6. Device Pairing & Trusted Devices Handshake
+    socket.on("pairing:request", async ({ targetSocketId, targetDeviceId }) => {
+      try {
+        const sender = await Device.findOne({ socketId: socket.id });
+        const receiver = await Device.findOne({
+          $or: [{ socketId: targetSocketId }, { deviceId: targetDeviceId }],
+        });
+
+        if (!receiver) {
+          return socket.emit("pairing:error", { message: "Target device not found" });
+        }
+
+        // Generate 6-digit PIN
+        const pin = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Send to receiver
+        io.to(receiver.socketId).emit("pairing:incoming", {
+          from: {
+            socketId: socket.id,
+            name: sender ? sender.name : "Nearby Device",
+            deviceId: currentDeviceId,
+            type: sender?.type || "browser",
+          },
+          pin,
+        });
+
+        // Notify sender of initiated pairing
+        socket.emit("pairing:pending", {
+          targetDeviceName: receiver.name,
+          pin,
+        });
+
+        console.log(`[Pairing Request] PIN: ${pin} from ${sender?.name} to ${receiver?.name}`);
+      } catch (err) {
+        console.error("Error initiating pairing:", err);
+      }
+    });
+
+    socket.on("pairing:accept", async ({ senderSocketId, senderDeviceId }) => {
+      try {
+        const receiver = await Device.findOne({ socketId: socket.id });
+        const sender = await Device.findOne({
+          $or: [{ socketId: senderSocketId }, { deviceId: senderDeviceId }],
+        });
+
+        if (receiver && sender) {
+          // Add to trusted devices in MongoDB for both parties
+          await Device.findOneAndUpdate(
+            { deviceId: receiver.deviceId },
+            { $addToSet: { trustedDevices: sender.deviceId } }
+          );
+
+          await Device.findOneAndUpdate(
+            { deviceId: sender.deviceId },
+            { $addToSet: { trustedDevices: receiver.deviceId } }
+          );
+
+          // Notify both devices of successful pairing
+          io.to(sender.socketId).emit("pairing:success", {
+            pairedDevice: {
+              deviceId: receiver.deviceId,
+              name: receiver.name,
+              isTrusted: true,
+            },
+          });
+
+          socket.emit("pairing:success", {
+            pairedDevice: {
+              deviceId: sender.deviceId,
+              name: sender.name,
+              isTrusted: true,
+            },
+          });
+
+          console.log(`[Pairing Success] ${receiver.name} <-> ${sender.name} are now trusted`);
+        }
+      } catch (err) {
+        console.error("Error accepting pairing:", err);
+      }
+    });
+
+    socket.on("pairing:reject", async ({ senderSocketId, reason }) => {
+      if (senderSocketId) {
+        io.to(senderSocketId).emit("pairing:rejected", {
+          reason: reason || "Pairing request was declined",
+        });
+      }
+    });
+
+    // 7. Disconnect handling
     socket.on("disconnect", async () => {
       console.log(`[Socket Disconnected] ID: ${socket.id}`);
       try {

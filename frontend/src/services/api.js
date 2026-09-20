@@ -45,6 +45,21 @@ export const deviceApi = {
   updateDevice: (deviceId, updateData) => {
     return apiClient.patch(`/devices/${deviceId}`, updateData)
   },
+
+  // Get list of trusted devices from MongoDB
+  getTrustedDevices: (deviceId) => {
+    return apiClient.get(`/devices/${deviceId}/trusted`)
+  },
+
+  // Add trusted device
+  addTrustedDevice: (deviceId, targetDeviceId) => {
+    return apiClient.post(`/devices/${deviceId}/trust`, { targetDeviceId })
+  },
+
+  // Remove trusted device
+  removeTrustedDevice: (deviceId, targetDeviceId) => {
+    return apiClient.delete(`/devices/${deviceId}/trust/${targetDeviceId}`)
+  },
 }
 
 /* -------------------------------------------------------------

@@ -1,17 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSocket } from './context/SocketContext'
 import { useToast } from './context/ToastContext'
-import { transferApi } from './services/api'
+import { transferApi, deviceApi } from './services/api'
 import Navbar from './components/Navbar'
 import DevicePanel from './components/DevicePanel'
 import TransferPanel from './components/TransferPanel'
 import HistoryPanel from './components/HistoryPanel'
 import IncomingModal from './components/IncomingModal'
 import IncomingTextModal from './components/IncomingTextModal'
+import PairingModal from './components/PairingModal'
 import TransferProgress from './components/TransferProgress'
 
 export default function App() {
-  const { socket, peers, webrtcManager } = useSocket()
+  const { socket, peers, myDevice, webrtcManager } = useSocket()
   const { showToast } = useToast()
 
   const [selectedPeer, setSelectedPeer] = useState(null)
@@ -20,7 +21,12 @@ export default function App() {
   const [receiving, setReceiving] = useState(null)
   const [history, setHistory] = useState([])
 
-  // Function to load transfer history from MongoDB
+  // Pairing states
+  const [trustedDeviceIds, setTrustedDeviceIds] = useState([])
+  const [incomingPairing, setIncomingPairing] = useState(null)
+  const [pendingPairing, setPendingPairing] = useState(null)
+
+  // Load transfer history from MongoDB
   const loadHistory = useCallback(async () => {
     try {
       const res = await transferApi.getTransfers()
@@ -40,17 +46,67 @@ export default function App() {
     }
   }, [])
 
+  // Load trusted devices from MongoDB
+  const loadTrusted = useCallback(async () => {
+    if (!myDevice?.deviceId) return
+    try {
+      const res = await deviceApi.getTrustedDevices(myDevice.deviceId)
+      const list = res.data || []
+      setTrustedDeviceIds(list.map((d) => d.deviceId))
+    } catch (err) {
+      console.warn('Could not load trusted devices:', err.message)
+    }
+  }, [myDevice?.deviceId])
+
   useEffect(() => {
     loadHistory()
-  }, [loadHistory])
+    loadTrusted()
+  }, [loadHistory, loadTrusted])
 
-  // Socket event listeners for transfer requests and handshake
+  // Accept transfer helper
+  const acceptTransfer = useCallback(
+    ({ from, files, transferId }) => {
+      const senderSocketId = from.socketId || from.id
+
+      socket.emit('transfer:accept', {
+        from: senderSocketId,
+        senderSocketId,
+        transferId,
+      })
+
+      setIncomingRequest(null)
+
+      setReceiving({
+        fromName: from.name,
+        files,
+        transferId,
+        progressItems: files.map((f) => ({
+          name: f.name,
+          size: f.size,
+          transferred: 0,
+          pct: 0,
+          speed: 'Connecting P2P...',
+          done: false,
+        })),
+      })
+
+      showToast(`Connecting to ${from.name} over WebRTC…`, 'info')
+    },
+    [socket, showToast]
+  )
+
+  // Socket event listeners for transfer requests and pairing
   useEffect(() => {
     if (!socket) return
 
     // Incoming transfer request from another peer
     socket.on('transfer:request', ({ from, files, transferId }) => {
-      setIncomingRequest({ from, files, transferId })
+      if (trustedDeviceIds.includes(from.deviceId)) {
+        showToast(`Auto-accepting transfer from trusted device: ${from.name}`, 'info')
+        acceptTransfer({ from, files, transferId })
+      } else {
+        setIncomingRequest({ from, files, transferId })
+      }
     })
 
     // Our transfer request was accepted by the receiver
@@ -81,13 +137,41 @@ export default function App() {
       ])
     })
 
+    // Pairing Socket Handshake
+    socket.on('pairing:incoming', (data) => {
+      setIncomingPairing(data)
+    })
+
+    socket.on('pairing:pending', (data) => {
+      setPendingPairing(data)
+    })
+
+    socket.on('pairing:success', ({ pairedDevice }) => {
+      setIncomingPairing(null)
+      setPendingPairing(null)
+      setTrustedDeviceIds((prev) =>
+        prev.includes(pairedDevice.deviceId) ? prev : [...prev, pairedDevice.deviceId]
+      )
+      showToast(`✓ Paired & trusted with ${pairedDevice.name}!`, 'success')
+    })
+
+    socket.on('pairing:rejected', ({ reason }) => {
+      setIncomingPairing(null)
+      setPendingPairing(null)
+      showToast(`Pairing declined: ${reason || 'Rejected by peer'}`, 'info')
+    })
+
     return () => {
       socket.off('transfer:request')
       socket.off('transfer:accepted')
       socket.off('transfer:rejected')
       socket.off('text:receive')
+      socket.off('pairing:incoming')
+      socket.off('pairing:pending')
+      socket.off('pairing:success')
+      socket.off('pairing:rejected')
     }
-  }, [socket, showToast])
+  }, [socket, trustedDeviceIds, acceptTransfer, showToast])
 
   // WebRTC receiver-side callbacks
   useEffect(() => {
@@ -135,37 +219,6 @@ export default function App() {
     }
   }, [peers, selectedPeer, showToast])
 
-  // Handle accepting incoming transfer
-  function acceptIncoming() {
-    const { from, files, transferId } = incomingRequest
-    const senderSocketId = from.socketId || from.id
-
-    socket.emit('transfer:accept', {
-      from: senderSocketId,
-      senderSocketId,
-      transferId,
-    })
-
-    setIncomingRequest(null)
-
-    // Open live receiving progress overlay
-    setReceiving({
-      fromName: from.name,
-      files,
-      transferId,
-      progressItems: files.map((f) => ({
-        name: f.name,
-        size: f.size,
-        transferred: 0,
-        pct: 0,
-        speed: 'Connecting P2P...',
-        done: false,
-      })),
-    })
-
-    showToast(`Connecting to ${from.name} over WebRTC…`, 'info')
-  }
-
   // Handle rejecting incoming transfer
   function rejectIncoming() {
     const { from, transferId } = incomingRequest
@@ -176,6 +229,51 @@ export default function App() {
       reason: 'Declined by receiver',
     })
     setIncomingRequest(null)
+  }
+
+  // Handle Pairing Requests
+  const handlePairRequest = (peer) => {
+    const targetSocketId = peer.id || peer.socketId
+    socket.emit('pairing:request', {
+      targetSocketId,
+      targetDeviceId: peer.deviceId,
+    })
+  }
+
+  const handleAcceptPairing = () => {
+    if (!incomingPairing) return
+    const senderSocketId = incomingPairing.from?.socketId || incomingPairing.from?.id
+    socket.emit('pairing:accept', {
+      senderSocketId,
+      senderDeviceId: incomingPairing.from?.deviceId,
+    })
+    setIncomingPairing(null)
+  }
+
+  const handleRejectPairing = () => {
+    if (!incomingPairing) return
+    const senderSocketId = incomingPairing.from?.socketId || incomingPairing.from?.id
+    socket.emit('pairing:reject', {
+      senderSocketId,
+      reason: 'Declined by user',
+    })
+    setIncomingPairing(null)
+  }
+
+  const handleToggleTrust = async (peer, shouldTrust) => {
+    try {
+      if (shouldTrust) {
+        await deviceApi.addTrustedDevice(myDevice.deviceId, peer.deviceId)
+        setTrustedDeviceIds((prev) => [...prev, peer.deviceId])
+        showToast(`Marked ${peer.name} as trusted`, 'success')
+      } else {
+        await deviceApi.removeTrustedDevice(myDevice.deviceId, peer.deviceId)
+        setTrustedDeviceIds((prev) => prev.filter((id) => id !== peer.deviceId))
+        showToast(`Removed trust for ${peer.name}`, 'info')
+      }
+    } catch (err) {
+      showToast('Failed to update trust in database', 'error')
+    }
   }
 
   function addToHistory(entry) {
@@ -197,7 +295,13 @@ export default function App() {
       <Navbar />
 
       <main className="app-layout">
-        <DevicePanel selectedPeer={selectedPeer} onSelect={setSelectedPeer} />
+        <DevicePanel
+          selectedPeer={selectedPeer}
+          onSelect={setSelectedPeer}
+          trustedDeviceIds={trustedDeviceIds}
+          onPairRequest={handlePairRequest}
+          onToggleTrust={handleToggleTrust}
+        />
 
         <TransferPanel
           selectedPeer={selectedPeer}
@@ -212,7 +316,7 @@ export default function App() {
       {/* Incoming transfer request modal */}
       <IncomingModal
         request={incomingRequest}
-        onAccept={acceptIncoming}
+        onAccept={() => acceptTransfer(incomingRequest)}
         onReject={rejectIncoming}
       />
 
@@ -236,6 +340,15 @@ export default function App() {
       <IncomingTextModal
         textData={incomingText}
         onClose={() => setIncomingText(null)}
+      />
+
+      {/* Device PIN Pairing Modal */}
+      <PairingModal
+        incomingPairing={incomingPairing}
+        pendingPairing={pendingPairing}
+        onAccept={handleAcceptPairing}
+        onReject={handleRejectPairing}
+        onCancel={() => setPendingPairing(null)}
       />
     </>
   )
