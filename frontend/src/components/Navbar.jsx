@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useSocket } from '../context/SocketContext'
 
-export default function Navbar() {
+export default function Navbar({ onOpenQR }) {
   const { connected, myDevice, updateDeviceName } = useSocket()
   const [editing, setEditing] = useState(false)
   const [nameInput, setNameInput] = useState('')
@@ -57,23 +57,41 @@ export default function Navbar() {
             </button>
           </form>
         ) : (
-          <span>
+          <span className="nav-device-label">
             <strong
               onClick={startEdit}
+              className="nav-device-name"
               title="Click to rename your device"
               style={{ cursor: 'pointer', borderBottom: '1px dashed var(--gray-400)' }}
             >
               {myDevice.name}
-            </strong>{' '}
-            · {myDevice.ip}
+            </strong>
+            <span className="nav-device-ip"> · {myDevice.ip}</span>
           </span>
         )}
       </div>
 
-      {/* Connection status */}
-      <div className="nav-status">
-        <div className={`status-dot ${connected ? 'online' : ''}`} />
-        {connected ? 'Online' : 'Offline'}
+      {/* Actions and connection status */}
+      <div className="nav-actions">
+        <button
+          type="button"
+          className="btn btn-outline nav-qr-btn"
+          onClick={onOpenQR}
+          title="Show Pairing QR Code"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '15px', height: '15px' }}>
+            <rect x="3" y="3" width="7" height="7" />
+            <rect x="14" y="3" width="7" height="7" />
+            <rect x="14" y="14" width="7" height="7" />
+            <rect x="3" y="14" width="7" height="7" />
+          </svg>
+          <span className="nav-qr-label">Show QR</span>
+        </button>
+
+        <div className="nav-status">
+          <div className={`status-dot ${connected ? 'online' : ''}`} />
+          <span className="nav-status-text">{connected ? 'Online' : 'Offline'}</span>
+        </div>
       </div>
     </header>
   )

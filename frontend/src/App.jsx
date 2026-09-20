@@ -9,10 +9,11 @@ import HistoryPanel from './components/HistoryPanel'
 import IncomingModal from './components/IncomingModal'
 import IncomingTextModal from './components/IncomingTextModal'
 import PairingModal from './components/PairingModal'
+import QRCodeModal from './components/QRCodeModal'
 import TransferProgress from './components/TransferProgress'
 
 export default function App() {
-  const { socket, peers, myDevice, webrtcManager } = useSocket()
+  const { socket, peers, myDevice, webrtcManager, connected } = useSocket()
   const { showToast } = useToast()
 
   const [selectedPeer, setSelectedPeer] = useState(null)
@@ -20,6 +21,8 @@ export default function App() {
   const [incomingText, setIncomingText] = useState(null)
   const [receiving, setReceiving] = useState(null)
   const [history, setHistory] = useState([])
+  const [qrOpen, setQrOpen] = useState(false)
+  const [mobileTab, setMobileTab] = useState('devices') // 'devices' | 'transfer' | 'history'
 
   // Pairing states
   const [trustedDeviceIds, setTrustedDeviceIds] = useState([])
@@ -62,6 +65,21 @@ export default function App() {
     loadHistory()
     loadTrusted()
   }, [loadHistory, loadTrusted])
+
+  // Handle auto-pairing from QR code scan URL query parameters
+  useEffect(() => {
+    if (!socket || !connected) return
+    const params = new URLSearchParams(window.location.search)
+    const pairDeviceId = params.get('pair')
+    const pairName = params.get('name')
+    const pairPin = params.get('pin')
+
+    if (pairDeviceId) {
+      showToast(`Connecting with ${pairName || 'Nearby Device'} via QR...`, 'info')
+      socket.emit('qr:pair', { hostDeviceId: pairDeviceId, pin: pairPin })
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+  }, [socket, connected, showToast])
 
   // Accept transfer helper
   const acceptTransfer = useCallback(
@@ -161,6 +179,31 @@ export default function App() {
       showToast(`Pairing declined: ${reason || 'Rejected by peer'}`, 'info')
     })
 
+    // Instant QR code pairing success handler
+    socket.on('qr:paired', ({ pairedDevice, message }) => {
+      setIncomingPairing(null)
+      setPendingPairing(null)
+      setQrOpen(false)
+      if (pairedDevice?.deviceId) {
+        setTrustedDeviceIds((prev) =>
+          prev.includes(pairedDevice.deviceId) ? prev : [...prev, pairedDevice.deviceId]
+        )
+        // Automatically select paired device and switch to transfer tab
+        setSelectedPeer((current) => {
+          if (!current || current.deviceId === pairedDevice.deviceId) {
+            return pairedDevice
+          }
+          return current || pairedDevice
+        })
+        setMobileTab('transfer')
+      }
+      showToast(message || `✓ Connected to ${pairedDevice?.name || 'Device'}!`, 'success')
+    })
+
+    socket.on('qr:error', ({ message }) => {
+      showToast(message || 'QR pairing failed', 'error')
+    })
+
     return () => {
       socket.off('transfer:request')
       socket.off('transfer:accepted')
@@ -170,8 +213,19 @@ export default function App() {
       socket.off('pairing:pending')
       socket.off('pairing:success')
       socket.off('pairing:rejected')
+      socket.off('qr:paired')
+      socket.off('qr:error')
     }
   }, [socket, trustedDeviceIds, acceptTransfer, showToast])
+
+  // Keep selectedPeer updated with latest socketId / connection info from peers list
+  useEffect(() => {
+    if (!selectedPeer || !peers || peers.length === 0) return
+    const updated = peers.find((p) => p.deviceId === selectedPeer.deviceId)
+    if (updated && (updated.socketId !== selectedPeer.socketId || updated.id !== selectedPeer.id)) {
+      setSelectedPeer(updated)
+    }
+  }, [peers, selectedPeer])
 
   // WebRTC receiver-side callbacks using pub/sub listeners
   useEffect(() => {
@@ -310,26 +364,87 @@ export default function App() {
 
   return (
     <>
-      <Navbar />
+      <Navbar onOpenQR={() => setQrOpen(true)} />
 
       <main className="app-layout">
-        <DevicePanel
-          selectedPeer={selectedPeer}
-          onSelect={setSelectedPeer}
-          trustedDeviceIds={trustedDeviceIds}
-          onPairRequest={handlePairRequest}
-          onToggleTrust={handleToggleTrust}
-        />
+        <div className={`panel-wrapper panel-devices ${mobileTab === 'devices' ? 'active-mobile' : ''}`}>
+          <DevicePanel
+            selectedPeer={selectedPeer}
+            onSelect={(peer) => {
+              setSelectedPeer(peer)
+              setMobileTab('transfer')
+            }}
+            trustedDeviceIds={trustedDeviceIds}
+            onPairRequest={handlePairRequest}
+            onToggleTrust={handleToggleTrust}
+          />
+        </div>
 
-        <TransferPanel
-          selectedPeer={selectedPeer}
-          onDisconnect={() => setSelectedPeer(null)}
-          onFileDone={addToHistory}
-          onTransferCompleted={loadHistory}
-        />
+        <div className={`panel-wrapper panel-transfer ${mobileTab === 'transfer' ? 'active-mobile' : ''}`}>
+          <TransferPanel
+            selectedPeer={selectedPeer}
+            onDisconnect={() => {
+              setSelectedPeer(null)
+              setMobileTab('devices')
+            }}
+            onSwitchToDevices={() => setMobileTab('devices')}
+            onFileDone={addToHistory}
+            onTransferCompleted={loadHistory}
+          />
+        </div>
 
-        <HistoryPanel history={history} onClear={handleClearHistory} />
+        <div className={`panel-wrapper panel-history ${mobileTab === 'history' ? 'active-mobile' : ''}`}>
+          <HistoryPanel history={history} onClear={handleClearHistory} />
+        </div>
       </main>
+
+      {/* Mobile Bottom Tab Bar */}
+      <nav className="mobile-nav-bar" aria-label="Mobile Navigation">
+        <button
+          type="button"
+          className={`mobile-nav-item ${mobileTab === 'devices' ? 'active' : ''}`}
+          onClick={() => setMobileTab('devices')}
+        >
+          <div className="mobile-nav-icon-wrapper">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            {peers.length > 0 && <span className="mobile-nav-badge">{peers.length}</span>}
+          </div>
+          <span>Devices</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${mobileTab === 'transfer' ? 'active' : ''}`}
+          onClick={() => setMobileTab('transfer')}
+        >
+          <div className="mobile-nav-icon-wrapper">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M7 17l9.2-9.2M17 17V8H8" />
+            </svg>
+            {selectedPeer && <span className="mobile-nav-dot" />}
+          </div>
+          <span>{selectedPeer ? selectedPeer.name : 'Transfer'}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${mobileTab === 'history' ? 'active' : ''}`}
+          onClick={() => setMobileTab('history')}
+        >
+          <div className="mobile-nav-icon-wrapper">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            {history.length > 0 && <span className="mobile-nav-badge">{history.length}</span>}
+          </div>
+          <span>History</span>
+        </button>
+      </nav>
 
       {/* Incoming transfer request modal */}
       <IncomingModal
@@ -388,6 +503,13 @@ export default function App() {
         onAccept={handleAcceptPairing}
         onReject={handleRejectPairing}
         onCancel={() => setPendingPairing(null)}
+      />
+
+      {/* QR Code Pairing Modal */}
+      <QRCodeModal
+        myDevice={myDevice}
+        isOpen={qrOpen}
+        onClose={() => setQrOpen(false)}
       />
     </>
   )

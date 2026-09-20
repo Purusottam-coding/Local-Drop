@@ -12,7 +12,7 @@ export default function PairingModal({
     const { from, pin } = incomingPairing
     return (
       <div className="modal-overlay">
-        <div className="modal" style={{ width: '400px', textAlign: 'center' }}>
+        <div className="modal" style={{ width: '100%', maxWidth: '400px', textAlign: 'center' }}>
           <div style={{ fontSize: '32px', marginBottom: '4px' }}>🔐</div>
           <h3>Connection Request</h3>
           <p style={{ fontSize: '13px', color: 'var(--gray-600)', margin: '8px 0 16px' }}>
@@ -66,7 +66,7 @@ export default function PairingModal({
     const { targetDeviceName, pin } = pendingPairing
     return (
       <div className="modal-overlay">
-        <div className="modal" style={{ width: '400px', textAlign: 'center' }}>
+        <div className="modal" style={{ width: '100%', maxWidth: '400px', textAlign: 'center' }}>
           <div className="scan-spinner" style={{ margin: '0 auto 12px' }} />
           <h3>Pairing with {targetDeviceName}</h3>
           <p style={{ fontSize: '13px', color: 'var(--gray-600)', margin: '8px 0 16px' }}>

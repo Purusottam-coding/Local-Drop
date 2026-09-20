@@ -93,4 +93,10 @@ export const healthApi = {
   },
 }
 
+export const networkApi = {
+  getNetworkInfo: () => {
+    return apiClient.get('/network-info')
+  },
+}
+
 export default apiClient

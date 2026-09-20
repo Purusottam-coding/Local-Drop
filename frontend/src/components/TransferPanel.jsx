@@ -12,7 +12,7 @@ const STATE = {
   TRANSFERRING: 'transferring',
 }
 
-export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone, onTransferCompleted }) {
+export default function TransferPanel({ selectedPeer, onDisconnect, onSwitchToDevices, onFileDone, onTransferCompleted }) {
   const { socket, webrtcManager } = useSocket()
   const { showToast } = useToast()
 
@@ -173,8 +173,18 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone, 
             <line x1="6" y1="12" x2="6.01" y2="12" />
             <line x1="10" y1="12" x2="10.01" y2="12" />
           </svg>
-          <h3>Select a device</h3>
-          <p>Pick a device from the left panel, then drag & drop files to send directly over WebRTC.</p>
+          <h3>Ready to Share</h3>
+          <p>Pick a nearby device or scan a QR code to transfer files and clipboard text directly over WebRTC.</p>
+          {onSwitchToDevices && (
+            <button
+              type="button"
+              className="btn btn-primary placeholder-action-btn"
+              onClick={onSwitchToDevices}
+              style={{ marginTop: '10px' }}
+            >
+              Choose Nearby Device
+            </button>
+          )}
         </div>
       </div>
     )
@@ -186,16 +196,18 @@ export default function TransferPanel({ selectedPeer, onDisconnect, onFileDone, 
         {/* Target bar */}
         <div className="target-bar">
           <div className="avatar">{selectedPeer.name[0]?.toUpperCase() || 'P'}</div>
-          <div>
-            <div className="target-name">{selectedPeer.name}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div className="target-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedPeer.name}
+            </div>
             <div className="target-status">
               {state === STATE.WAITING && 'Waiting for acceptance…'}
               {state === STATE.TRANSFERRING && 'P2P WebRTC Transferring…'}
               {state === STATE.IDLE && 'Ready to send'}
             </div>
           </div>
-          <button className="btn btn-outline" style={{ marginLeft: 'auto' }} onClick={onDisconnect}>
-            Disconnect
+          <button className="btn btn-outline target-disconnect-btn" onClick={onDisconnect}>
+            Change
           </button>
         </div>
 
