@@ -358,7 +358,7 @@ export default function App() {
         setTrustedDeviceIds((prev) => prev.filter((id) => id !== peer.deviceId))
         showToast(`Removed trust for ${peer.name}`, 'info')
       }
-    } catch (err) {
+    } catch {
       showToast('Failed to update trust in database', 'error')
     }
   }
