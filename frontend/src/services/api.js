@@ -1,8 +1,15 @@
 import axios from 'axios'
 
 // Dedicated Axios Client for LocalDrop API
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined' && window.location.port === '5173') {
+    return `${window.location.protocol}//${window.location.hostname}:7000/api`
+  }
+  return '/api'
+}
+
 const apiClient = axios.create({
-  baseURL: '/api',
+  baseURL: getApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -59,6 +66,11 @@ export const deviceApi = {
   // Remove trusted device
   removeTrustedDevice: (deviceId, targetDeviceId) => {
     return apiClient.delete(`/devices/${deviceId}/trust/${targetDeviceId}`)
+  },
+
+  // Delete or dismiss device from database
+  deleteDevice: (deviceId) => {
+    return apiClient.delete(`/devices/${deviceId}`)
   },
 }
 

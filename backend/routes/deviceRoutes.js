@@ -5,6 +5,7 @@ const {
   getDeviceById,
   registerDevice,
   updateDevice,
+  deleteDevice,
   addTrustedDevice,
   removeTrustedDevice,
   getTrustedDevices,
@@ -14,6 +15,7 @@ router.get("/", getDevices);
 router.get("/:deviceId", getDeviceById);
 router.post("/register", registerDevice);
 router.patch("/:deviceId", updateDevice);
+router.delete("/:deviceId", deleteDevice);
 
 // Trusted devices endpoints
 router.post("/:deviceId/trust", addTrustedDevice);

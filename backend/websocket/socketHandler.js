@@ -8,6 +8,10 @@ const { sanitizeFilename, sanitizeFilesMetadata } = require("../utils/security")
 // Value: { pin, senderSocketId, senderDeviceId, targetDeviceId, expiresAt }
 const pendingPairings = new Map();
 
+// In-memory temporary QR codes (5-minute TTL): key = hostDeviceId
+// Value: { pin, expiresAt }
+const activeQRCodes = new Map();
+
 // In-memory set for active pairings: `${deviceIdA}:${deviceIdB}`
 const activePairingsCache = new Set();
 
@@ -52,7 +56,38 @@ function cleanupDevicePairingState(deviceId) {
   }
 }
 
+const formatPeer = (d) => ({
+  id: d.socketId,
+  deviceId: d.deviceId,
+  name: d.name,
+  type: d.type,
+  ip: d.ip,
+  socketId: d.socketId,
+  lastSeen: d.lastSeen,
+  isTrusted: d.isTrusted,
+});
+
 function setupSocketIO(io, getLANIp) {
+  // Helper to get only genuinely connected devices
+  const getActiveOnlineDevices = async (excludeDeviceId) => {
+    const activeSockets = io.sockets.sockets;
+    const dbDevices = await Device.find({
+      isOnline: true,
+      ...(excludeDeviceId ? { deviceId: { $ne: excludeDeviceId } } : {}),
+    }).select("deviceId name type ip socketId lastSeen isTrusted");
+
+    const activeList = [];
+    for (const d of dbDevices) {
+      if (d.socketId && activeSockets.has(d.socketId)) {
+        activeList.push(d);
+      } else {
+        // Stale zombie device: clear from DB
+        await Device.updateOne({ _id: d._id }, { isOnline: false, socketId: null });
+      }
+    }
+    return activeList;
+  };
+
   io.on("connection", (socket) => {
     let currentDeviceId = null;
 
@@ -90,17 +125,6 @@ function setupSocketIO(io, getLANIp) {
           { new: true, upsert: true }
         );
 
-        const formatPeer = (d) => ({
-          id: d.socketId,
-          deviceId: d.deviceId,
-          name: d.name,
-          type: d.type,
-          ip: d.ip,
-          socketId: d.socketId,
-          lastSeen: d.lastSeen,
-          isTrusted: d.isTrusted,
-        });
-
         // Acknowledge back to the current device
         socket.emit("device:registered", {
           deviceId: device.deviceId,
@@ -122,12 +146,8 @@ function setupSocketIO(io, getLANIp) {
         socket.broadcast.emit("device:online", peerPayload);
         socket.broadcast.emit("peer:joined", peerPayload);
 
-        // Send list of currently online devices to this socket
-        const onlineDevices = await Device.find({
-          isOnline: true,
-          deviceId: { $ne: deviceId },
-        }).select("deviceId name type ip socketId lastSeen isTrusted");
-
+        // Send list of verified currently online devices to this socket
+        const onlineDevices = await getActiveOnlineDevices(deviceId);
         const formattedList = onlineDevices.map(formatPeer);
         socket.emit("devices:list", formattedList);
         socket.emit("peers:list", formattedList);
@@ -142,21 +162,8 @@ function setupSocketIO(io, getLANIp) {
     // 2. Request active peer list (supports both devices:refresh and peers:scan)
     const sendPeerList = async () => {
       try {
-        const onlineDevices = await Device.find({
-          isOnline: true,
-          deviceId: { $ne: currentDeviceId },
-        }).select("deviceId name type ip socketId lastSeen isTrusted");
-
-        const formatted = onlineDevices.map((d) => ({
-          id: d.socketId,
-          deviceId: d.deviceId,
-          name: d.name,
-          type: d.type,
-          ip: d.ip,
-          socketId: d.socketId,
-          lastSeen: d.lastSeen,
-          isTrusted: d.isTrusted,
-        }));
+        const onlineDevices = await getActiveOnlineDevices(currentDeviceId);
+        const formatted = onlineDevices.map(formatPeer);
 
         socket.emit("devices:list", formatted);
         socket.emit("peers:list", formatted);
@@ -750,10 +757,57 @@ function setupSocketIO(io, getLANIp) {
       }
     });
 
-    // 6.2 Instant QR Code Pairing Handshake
+    // 6.2 Instant QR Code Pairing Handshake (with 5-minute expiration & auto-renewal)
+    socket.on("qr:create", ({ pin, expiresIn = 300, deviceId }) => {
+      const devId = deviceId || currentDeviceId;
+      if (!devId) return;
+
+      const previousSession = activeQRCodes.get(devId);
+      activeQRCodes.set(devId, {
+        pin: String(pin).trim(),
+        expiresAt: Date.now() + (parseInt(expiresIn, 10) || 300) * 1000,
+        // Retain previous PIN for a 30s grace window in case a device scanned right before auto-refresh
+        previousPin: previousSession ? previousSession.pin : null,
+        previousExpiresAt: previousSession ? Date.now() + 30 * 1000 : null,
+      });
+      console.log(`[QR Code Created/Renewed] Host: ${devId} with PIN: ${pin} (TTL: ${expiresIn}s)`);
+    });
+
     socket.on("qr:pair", async ({ hostDeviceId, pin }) => {
       try {
         console.log(`[QR Pair Request] Scanner socket ${socket.id} attempting to pair with host ${hostDeviceId}`);
+
+        // Verify QR session exists
+        const qrSession = activeQRCodes.get(hostDeviceId);
+        if (!qrSession) {
+          return socket.emit("qr:error", {
+            message: "QR code not found or expired. Please scan the newly generated QR code on the host.",
+          });
+        }
+
+        const now = Date.now();
+        const inputPin = String(pin || "").trim();
+
+        // Check current pin validity
+        const isCurrentPinValid = inputPin === qrSession.pin && now <= qrSession.expiresAt;
+        // Check grace-period validity for immediately prior pin during auto-refresh
+        const isPreviousPinValid =
+          qrSession.previousPin &&
+          inputPin === qrSession.previousPin &&
+          qrSession.previousExpiresAt &&
+          now <= qrSession.previousExpiresAt;
+
+        if (!isCurrentPinValid && !isPreviousPinValid) {
+          if (now > qrSession.expiresAt && (!qrSession.previousExpiresAt || now > qrSession.previousExpiresAt)) {
+            activeQRCodes.delete(hostDeviceId);
+            return socket.emit("qr:error", {
+              message: "This QR code has expired (5-minute limit). Please scan the new QR code on the host.",
+            });
+          }
+          return socket.emit("qr:error", {
+            message: "Invalid QR pairing PIN. Please scan the current QR code on the host.",
+          });
+        }
 
         let scannerDevice = await Device.findOne({ socketId: socket.id });
         if (!scannerDevice && currentDeviceId) {
@@ -762,8 +816,8 @@ function setupSocketIO(io, getLANIp) {
 
         const hostDevice = await Device.findOne({ deviceId: hostDeviceId });
 
-        if (!hostDevice) {
-          return socket.emit("qr:error", { message: "Host device not found or offline" });
+        if (!hostDevice || !hostDevice.socketId || !io.sockets.sockets.has(hostDevice.socketId)) {
+          return socket.emit("qr:error", { message: "Host device is offline or unavailable" });
         }
 
         const scannerId = scannerDevice ? scannerDevice.deviceId : currentDeviceId;
@@ -781,6 +835,9 @@ function setupSocketIO(io, getLANIp) {
           );
 
           registerPairing(scannerId, hostDevice.deviceId);
+
+          // Consume the used QR code
+          activeQRCodes.delete(hostDeviceId);
 
           const scannerPayload = {
             id: socket.id,
@@ -827,6 +884,42 @@ function setupSocketIO(io, getLANIp) {
       } catch (err) {
         console.error("Error in qr:pair:", err);
         socket.emit("qr:error", { message: "QR pairing failed" });
+      }
+    });
+
+    // 6.3 Manual Device Removal from Nearby / Connected List
+    socket.on("device:remove", async ({ targetDeviceId }) => {
+      try {
+        if (!targetDeviceId) return;
+        const myDevId = currentDeviceId;
+
+        if (myDevId) {
+          await Device.findOneAndUpdate(
+            { deviceId: myDevId },
+            { $pull: { trustedDevices: targetDeviceId }, isTrusted: false }
+          );
+          unregisterPairing(myDevId, targetDeviceId);
+        }
+
+        await Device.findOneAndUpdate(
+          { deviceId: targetDeviceId },
+          { $pull: { trustedDevices: myDevId }, isTrusted: false }
+        );
+
+        // Notify target device if online
+        const targetDev = await Device.findOne({ deviceId: targetDeviceId });
+        if (targetDev && targetDev.socketId) {
+          io.to(targetDev.socketId).emit("pairing:disconnected", {
+            disconnectedBy: { deviceId: myDevId },
+            targetDeviceId: myDevId,
+          });
+        }
+
+        // Unpair and acknowledge removal without destroying device record from MongoDB
+        socket.emit("device:removed", { deviceId: targetDeviceId });
+        console.log(`[Device Unpaired & Dismissed] ${targetDeviceId} dismissed by ${myDevId}`);
+      } catch (err) {
+        console.error("Error in device:remove:", err);
       }
     });
 
@@ -1067,10 +1160,28 @@ function setupSocketIO(io, getLANIp) {
           await disconnectingDev.save();
 
           cleanupDevicePairingState(devId);
+          activeQRCodes.delete(devId);
 
           const offlinePayload = { deviceId: disconnectingDev.deviceId, name: disconnectingDev.name, id: socket.id };
           io.emit("device:offline", offlinePayload);
           io.emit("peer:left", offlinePayload);
+
+          // Broadcast fresh active peers list to all remaining online sockets
+          const remainingSockets = io.sockets.sockets;
+          for (const [sockId, s] of remainingSockets.entries()) {
+            try {
+              const dev = await Device.findOne({ socketId: sockId });
+              if (dev) {
+                const peers = await getActiveOnlineDevices(dev.deviceId);
+                const list = peers.map(formatPeer);
+                s.emit("peers:list", list);
+                s.emit("devices:list", list);
+              }
+            } catch (err) {
+              console.error("Error refreshing peers on disconnect:", err);
+            }
+          }
+
           console.log(`[Device Offline & Paired Sessions Cleared] ${disconnectingDev.name}`);
         }
       } catch (err) {

@@ -23,7 +23,9 @@
   - Express security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy`).
   - Chunk buffer limit guards preventing memory exhaustion attacks.
 
+---
 
+## Tech Stack
 
 - **Frontend**:
   - [React 19](https://react.dev/) + [Vite](https://vitejs.dev/)

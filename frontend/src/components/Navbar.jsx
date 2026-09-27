@@ -3,7 +3,7 @@ import { useSocket } from '../context/SocketContext'
 import { isSoundEnabled, setSoundEnabled, playChime } from '../utils/audioFeedback'
 
 export default function Navbar({ onOpenQR, onOpenSession, activeSession }) {
-  const { connected, myDevice, updateDeviceName } = useSocket()
+  const { connected, myDevice, updateDeviceName, reconnectSocket } = useSocket()
   const [editing, setEditing] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [soundOn, setSoundOn] = useState(isSoundEnabled)
@@ -144,10 +144,27 @@ export default function Navbar({ onOpenQR, onOpenSession, activeSession }) {
           {soundOn ? '🔔' : '🔕'}
         </button>
 
-        <div className="nav-status">
+        <button
+          type="button"
+          className="nav-status"
+          onClick={!connected ? reconnectSocket : undefined}
+          title={!connected ? 'Offline: Click to reconnect' : 'Online: Connected to LocalDrop server'}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: !connected ? 'pointer' : 'default',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '4px 8px',
+            borderRadius: '6px',
+          }}
+        >
           <div className={`status-dot ${connected ? 'online' : ''}`} />
-          <span className="nav-status-text">{connected ? 'Online' : 'Offline'}</span>
-        </div>
+          <span className="nav-status-text">
+            {connected ? 'Online' : 'Offline (Click to retry)'}
+          </span>
+        </button>
       </div>
     </header>
   )

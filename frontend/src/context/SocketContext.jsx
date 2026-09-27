@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { io } from 'socket.io-client'
-import { deviceApi } from '../services/api'
+import { deviceApi, networkApi } from '../services/api'
 import { WebRTCManager } from '../services/webrtcService'
 
 const SocketContext = createContext(null)
@@ -37,6 +37,16 @@ function getStoredDeviceName(type) {
   return name
 }
 
+// Determine best socket connection URL: in dev, bypass Vite proxy directly to port 7000
+function getSocketUrl() {
+  if (typeof window === 'undefined') return '/'
+  const { protocol, hostname, port } = window.location
+  if (port === '5173') {
+    return `${protocol}//${hostname}:7000`
+  }
+  return '/'
+}
+
 export function SocketProvider({ children }) {
   const [socket, setSocket] = useState(null)
   const [webrtcManager, setWebrtcManager] = useState(null)
@@ -48,23 +58,69 @@ export function SocketProvider({ children }) {
     return { deviceId, name, type, ip: 'Detecting…' }
   })
   const [peers, setPeers] = useState([])
+  // Track temporarily dismissed peers in the current session without deleting them from database
+  const [dismissedPeerIds, setDismissedPeerIds] = useState(new Set())
+
+  // Pre-fetch LAN IP on mount so device card doesn't stay stuck at "Detecting…"
+  useEffect(() => {
+    networkApi
+      .getNetworkInfo()
+      .then((res) => {
+        if (res.lanIp && res.lanIp !== '127.0.0.1') {
+          setMyDevice((prev) => ({
+            ...prev,
+            ip: prev.ip === 'Detecting…' ? res.lanIp : prev.ip,
+            lanIp: res.lanIp,
+          }))
+        }
+      })
+      .catch((err) => {
+        console.warn('[SocketContext] Could not fetch initial LAN IP:', err.message)
+      })
+  }, [])
 
   useEffect(() => {
-    const s = io('/', { transports: ['websocket', 'polling'] })
+    const targetUrl = getSocketUrl()
+    console.log('[SocketContext] Connecting to server at:', targetUrl)
+
+    const s = io(targetUrl, {
+      transports: ['polling', 'websocket'], // Reliable polling first, auto-upgrade to websocket
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+    })
     setSocket(s)
     const rtc = new WebRTCManager(s)
     setWebrtcManager(rtc)
 
-    s.on('connect', () => {
-      setConnected(true)
-      // Register device identity upon connection
+    const registerSelf = () => {
       const deviceId = getStoredDeviceId()
       const type = detectDeviceType()
       const name = getStoredDeviceName(type)
       s.emit('device:register', { deviceId, name, type })
+    }
+
+    s.on('connect', () => {
+      console.log('[Socket Connected] ID:', s.id)
+      setConnected(true)
+      registerSelf()
     })
 
-    s.on('disconnect', () => {
+    s.on('reconnect', (attempt) => {
+      console.log('[Socket Reconnected] Attempt:', attempt)
+      setConnected(true)
+      registerSelf()
+    })
+
+    s.on('connect_error', (err) => {
+      console.warn('[Socket Connection Error]:', err.message)
+      setConnected(false)
+    })
+
+    s.on('disconnect', (reason) => {
+      console.warn('[Socket Disconnected]:', reason)
       setConnected(false)
     })
 
@@ -104,6 +160,19 @@ export function SocketProvider({ children }) {
       setPeers((prev) => prev.filter((p) => p.deviceId !== deviceId && p.id !== id))
     })
 
+    s.on('peer:left', ({ deviceId, id }) => {
+      setPeers((prev) => prev.filter((p) => p.deviceId !== deviceId && p.id !== id))
+    })
+
+    // Acknowledge device unpair/dismissal
+    s.on('device:removed', ({ deviceId }) => {
+      setDismissedPeerIds((prev) => {
+        const next = new Set(prev)
+        if (deviceId) next.add(deviceId)
+        return next
+      })
+    })
+
     return () => {
       rtc.cleanup()
       s.disconnect()
@@ -134,12 +203,39 @@ export function SocketProvider({ children }) {
     }
   }
 
-  // Refresh peer list
+  // Request peer list refresh - clears dismissed peers on user refresh / scan!
   const refreshPeers = () => {
+    setDismissedPeerIds(new Set())
     if (socket && socket.connected) {
-      socket.emit('devices:refresh')
+      socket.emit('peers:scan')
     }
   }
+
+  // Manual dismissal of a peer from local UI and unpair on socket (does NOT delete from DB)
+  const removePeer = (deviceId, targetSocketId) => {
+    setDismissedPeerIds((prev) => {
+      const next = new Set(prev)
+      if (deviceId) next.add(deviceId)
+      if (targetSocketId) next.add(targetSocketId)
+      return next
+    })
+
+    if (socket && socket.connected) {
+      socket.emit('device:remove', { targetDeviceId: deviceId, targetSocketId })
+    }
+  }
+
+  // Manual reconnection helper
+  const reconnectSocket = () => {
+    if (socket) {
+      socket.connect()
+    }
+  }
+
+  // Visible peers excludes any peer dismissed by the user in this session
+  const visiblePeers = peers.filter(
+    (p) => !dismissedPeerIds.has(p.deviceId) && !dismissedPeerIds.has(p.id) && !dismissedPeerIds.has(p.socketId)
+  )
 
   return (
     <SocketContext.Provider
@@ -148,10 +244,12 @@ export function SocketProvider({ children }) {
         webrtcManager,
         connected,
         myDevice,
-        peers,
+        peers: visiblePeers,
         setPeers,
+        removePeer,
         updateDeviceName,
         refreshPeers,
+        reconnectSocket,
       }}
     >
       {children}

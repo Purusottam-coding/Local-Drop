@@ -69,57 +69,100 @@ export default function DropZone({ onFiles }) {
   }
 
   return (
-    <div
-      className="drop-zone"
-      onDragOver={(e) => {
-        e.preventDefault()
-        e.currentTarget.classList.add('over')
-      }}
-      onDragLeave={(e) => e.currentTarget.classList.remove('over')}
-      onDrop={handleDrop}
-    >
-      <svg className="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <polyline points="16 16 12 12 8 16" />
-        <line x1="12" y1="12" x2="12" y2="21" />
-        <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
-      </svg>
-      <strong className="drop-zone-title-desktop">Drag files or folders here</strong>
-      <p className="drop-zone-sub-desktop">or choose what to send:</p>
-
-      <strong className="drop-zone-title-mobile">Tap to choose files, photos or folder</strong>
-
-      <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {/* Specific Quick Selection Cards: Send Files vs Send Folder */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
         <button
           type="button"
-          className="btn btn-outline"
-          style={{ fontSize: '12px', padding: '6px 14px', borderRadius: '20px' }}
-          onClick={(e) => {
-            e.stopPropagation()
-            fileInputRef.current?.click()
+          onClick={() => fileInputRef.current?.click()}
+          style={{
+            background: 'var(--white)',
+            border: '1.5px solid var(--blue)',
+            borderRadius: '10px',
+            padding: '14px 12px',
+            cursor: 'pointer',
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '6px',
+            transition: 'all 0.15s ease',
+            boxShadow: 'var(--shadow-sm)',
           }}
+          className="send-option-card"
         >
-          📄 Choose Files
+          <div style={{ fontSize: '24px', lineHeight: 1 }}>📄</div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--blue)' }}>
+            Send Files
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--gray-500)', lineHeight: 1.3 }}>
+            Choose individual or multiple files
+          </div>
         </button>
+
         <button
           type="button"
-          className="btn btn-outline"
-          style={{ fontSize: '12px', padding: '6px 14px', borderRadius: '20px' }}
-          onClick={(e) => {
-            e.stopPropagation()
-            folderInputRef.current?.click()
+          onClick={() => folderInputRef.current?.click()}
+          style={{
+            background: 'var(--white)',
+            border: '1.5px solid #059669',
+            borderRadius: '10px',
+            padding: '14px 12px',
+            cursor: 'pointer',
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '6px',
+            transition: 'all 0.15s ease',
+            boxShadow: 'var(--shadow-sm)',
           }}
+          className="send-option-card"
         >
-          📂 Choose Folder
+          <div style={{ fontSize: '24px', lineHeight: 1 }}>📂</div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#059669' }}>
+            Send Folder
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--gray-500)', lineHeight: 1.3 }}>
+            Send entire folder with subfolders
+          </div>
         </button>
       </div>
 
+      {/* Drag & Drop Area */}
+      <div
+        className="drop-zone"
+        onDragOver={(e) => {
+          e.preventDefault()
+          e.currentTarget.classList.add('over')
+        }}
+        onDragLeave={(e) => e.currentTarget.classList.remove('over')}
+        onDrop={handleDrop}
+        style={{ padding: '28px 20px', minHeight: '130px' }}
+      >
+        <svg className="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <polyline points="16 16 12 12 8 16" />
+          <line x1="12" y1="12" x2="12" y2="21" />
+          <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
+        </svg>
+        <strong className="drop-zone-title-desktop" style={{ fontSize: '13px' }}>
+          Or drag & drop files or folders here
+        </strong>
+        <p className="drop-zone-sub-desktop" style={{ fontSize: '11px', margin: 0 }}>
+          All subfolders and directory structure are preserved
+        </p>
+      </div>
+
+      {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
         type="file"
         multiple
         hidden
         onChange={(e) => {
-          onFiles(Array.from(e.target.files))
+          if (e.target.files?.length) {
+            onFiles(Array.from(e.target.files))
+          }
           e.target.value = ''
         }}
       />
@@ -131,7 +174,15 @@ export default function DropZone({ onFiles }) {
         multiple
         hidden
         onChange={(e) => {
-          onFiles(Array.from(e.target.files))
+          if (e.target.files?.length) {
+            const files = Array.from(e.target.files).map((f) => {
+              if (f.webkitRelativePath) {
+                f.relativePath = f.webkitRelativePath
+              }
+              return f
+            })
+            onFiles(files)
+          }
           e.target.value = ''
         }}
       />

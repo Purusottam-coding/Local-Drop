@@ -166,11 +166,32 @@ const getTrustedDevices = async (req, res) => {
   }
 };
 
+// @desc    Delete or dismiss a device completely from database
+// @route   DELETE /api/devices/:deviceId
+// @access  Public
+const deleteDevice = async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    // Remove device from anyone's trustedDevices list
+    await Device.updateMany(
+      { trustedDevices: deviceId },
+      { $pull: { trustedDevices: deviceId } }
+    );
+    // Delete the device record
+    await Device.findOneAndDelete({ deviceId });
+
+    res.json({ success: true, message: `Device ${deviceId} removed successfully` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getDevices,
   getDeviceById,
   registerDevice,
   updateDevice,
+  deleteDevice,
   addTrustedDevice,
   removeTrustedDevice,
   getTrustedDevices,

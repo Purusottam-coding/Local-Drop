@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import QRCode from 'qrcode'
 import { useSocket } from '../context/SocketContext'
 import { useToast } from '../context/ToastContext'
@@ -12,17 +12,61 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
   const [lanIp, setLanIp] = useState(myDevice?.lanIp || '')
   const [copied, setCopied] = useState(false)
   const [connectedPeerName, setConnectedPeerName] = useState(null)
+  const [timeLeft, setTimeLeft] = useState(300) // 5 minutes in seconds
+  const [autoRenewNotice, setAutoRenewNotice] = useState('')
 
-  // Fetch host LAN IP whenever modal opens
+  // Generate a fresh 5-minute temporary QR pairing PIN
+  const generateFreshQR = useCallback(
+    (isAuto = false) => {
+      const generatedPin = Math.floor(100000 + Math.random() * 900000).toString()
+      setPin(generatedPin)
+      setTimeLeft(300)
+
+      if (socket && socket.connected) {
+        socket.emit('qr:create', {
+          pin: generatedPin,
+          expiresIn: 300,
+          deviceId: myDevice?.deviceId,
+        })
+      }
+
+      if (isAuto) {
+        setAutoRenewNotice('Auto-generated new QR code')
+        setTimeout(() => setAutoRenewNotice(''), 3000)
+      }
+    },
+    [socket, myDevice?.deviceId]
+  )
+
+  // Countdown timer for 5-minute QR code expiration
+  useEffect(() => {
+    if (!isOpen) return
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0))
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [isOpen])
+
+  // Automatically generate a new QR code when the 5-minute timer expires
+  useEffect(() => {
+    if (!isOpen) return
+
+    if (timeLeft === 0) {
+      generateFreshQR(true)
+    }
+  }, [timeLeft, isOpen, generateFreshQR])
+
+  // Fetch host LAN IP & generate PIN whenever modal opens
   useEffect(() => {
     if (!isOpen) {
       setConnectedPeerName(null)
+      setAutoRenewNotice('')
       return
     }
 
-    // Generate a temporary 6-digit pairing PIN
-    const generatedPin = Math.floor(100000 + Math.random() * 900000).toString()
-    setPin(generatedPin)
+    generateFreshQR(false)
 
     // Fetch network IP from backend
     networkApi
@@ -35,7 +79,14 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
       .catch((err) => {
         console.warn('[QRCodeModal] Could not fetch LAN IP:', err.message)
       })
-  }, [isOpen])
+  }, [isOpen, generateFreshQR])
+
+  // Format seconds to MM:SS
+  const formatTimer = (seconds) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+  }
 
   // Resolve host address for mobile QR scanning
   const effectiveLanIp =
@@ -102,6 +153,11 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
     }
   }
 
+  const handleManualRefresh = () => {
+    generateFreshQR(false)
+    showToast('New QR code generated', 'info')
+  }
+
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ width: '100%', maxWidth: '400px', textAlign: 'center' }}>
@@ -117,7 +173,7 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
           </button>
         </div>
 
-        <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '0 0 14px' }}>
+        <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '0 0 12px' }}>
           Scan with any mobile camera on the same Wi-Fi to pair and transfer files instantly
         </p>
 
@@ -141,9 +197,70 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
           </div>
         ) : (
           <>
+            {/* Live Expiry Countdown & Auto-Renewal Badge */}
+            <div style={{ marginBottom: '10px' }}>
+              {autoRenewNotice ? (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '11px',
+                    padding: '3px 12px',
+                    borderRadius: '20px',
+                    background: '#ecfdf5',
+                    color: '#059669',
+                    fontWeight: 600,
+                    border: '1px solid #a7f3d0',
+                  }}
+                >
+                  🔄 {autoRenewNotice}
+                </span>
+              ) : (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '11px',
+                    padding: '3px 12px',
+                    borderRadius: '20px',
+                    background: timeLeft <= 30 ? '#fef2f2' : '#eff6ff',
+                    color: timeLeft <= 30 ? '#dc2626' : '#2563eb',
+                    fontWeight: 600,
+                    border: `1px solid ${timeLeft <= 30 ? '#fecaca' : '#bfdbfe'}`,
+                  }}
+                >
+                  ⏱️ {timeLeft <= 30 ? 'Auto-renewing in' : 'Auto-renews in'} {formatTimer(timeLeft)}
+                </span>
+              )}
+
+              {/* Progress Bar for the 5-Minute Window */}
+              <div
+                style={{
+                  width: '140px',
+                  height: '3px',
+                  background: 'var(--gray-200)',
+                  borderRadius: '2px',
+                  margin: '5px auto 0',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    width: `${(timeLeft / 300) * 100}%`,
+                    height: '100%',
+                    background: timeLeft <= 30 ? '#ef4444' : 'var(--blue)',
+                    transition: 'width 1s linear',
+                  }}
+                />
+              </div>
+            </div>
+
             {/* QR Code Canvas */}
             <div
               style={{
+                position: 'relative',
                 background: 'var(--white)',
                 border: '1px solid var(--gray-200)',
                 borderRadius: '12px',
@@ -154,7 +271,13 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
                 marginBottom: '12px',
               }}
             >
-              <canvas ref={canvasRef} style={{ display: 'block', borderRadius: '4px' }} />
+              <canvas
+                ref={canvasRef}
+                style={{
+                  display: 'block',
+                  borderRadius: '4px',
+                }}
+              />
             </div>
 
             {/* Network Address & Instructions */}
@@ -164,7 +287,7 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
                 border: '1px solid var(--gray-200)',
                 borderRadius: '8px',
                 padding: '10px 14px',
-                marginBottom: '14px',
+                marginBottom: '10px',
                 textAlign: 'left',
               }}
             >
@@ -187,6 +310,10 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
                 </div>
               </div>
             </div>
+
+            <p style={{ fontSize: '11px', color: 'var(--gray-400)', margin: '0 0 14px' }}>
+              Temporary QR code valid for 5 min • Auto-generates a new QR upon expiration
+            </p>
           </>
         )}
 
@@ -195,14 +322,23 @@ export default function QRCodeModal({ myDevice, isOpen, onClose }) {
             type="button"
             className="btn btn-outline"
             style={{ flex: 1, fontSize: '12px' }}
+            onClick={handleManualRefresh}
+            title="Generate a new QR code now"
+          >
+            🔄 New QR
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline"
+            style={{ flex: 1, fontSize: '12px' }}
             onClick={handleCopyLink}
           >
-            {copied ? '✓ Link Copied' : '🔗 Copy Link'}
+            {copied ? '✓ Copied' : '🔗 Copy Link'}
           </button>
           <button
             type="button"
             className="btn btn-primary"
-            style={{ flex: 1, fontSize: '12px' }}
+            style={{ minWidth: '70px', fontSize: '12px' }}
             onClick={onClose}
           >
             Done

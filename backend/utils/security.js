@@ -62,9 +62,14 @@ function sanitizeFilesMetadata(files) {
   if (!Array.isArray(files)) return [];
   return files.map((file) => {
     if (!file || typeof file !== 'object') return file;
+    const rawRel = typeof file.relativePath === 'string' ? file.relativePath : '';
+    // Strip leading slashes and any .. path traversal sequences
+    const safeRel = rawRel.replace(/\\/g, '/').replace(/\.\.+/g, '').replace(/^\/+/, '');
+
     return {
       ...file,
       name: sanitizeFilename(file.name || 'unnamed_file'),
+      relativePath: safeRel,
       size: typeof file.size === 'number' && file.size >= 0 ? file.size : 0,
     };
   });

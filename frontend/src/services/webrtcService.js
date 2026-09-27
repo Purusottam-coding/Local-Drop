@@ -189,6 +189,7 @@ export class WebRTCManager {
         type: 'file_header',
         index: i,
         name: file.name,
+        relativePath: file.relativePath || '',
         size: file.size,
         mimeType: file.type || 'application/octet-stream',
       })
@@ -328,6 +329,7 @@ export class WebRTCManager {
 
             this.emit('fileComplete', {
               fileName: this.currentFileMeta.name,
+              relativePath: this.currentFileMeta.relativePath || '',
               size: this.currentFileMeta.size,
               blob,
               isSender: false,

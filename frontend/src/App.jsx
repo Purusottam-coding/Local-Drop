@@ -15,7 +15,7 @@ import ReceivedFilesModal from './components/ReceivedFilesModal'
 import SessionModal from './components/SessionModal'
 
 export default function App() {
-  const { socket, peers, myDevice, webrtcManager, connected } = useSocket()
+  const { socket, peers, myDevice, webrtcManager, connected, removePeer } = useSocket()
   const { showToast } = useToast()
 
   const [selectedPeer, setSelectedPeer] = useState(null)
@@ -514,6 +514,36 @@ export default function App() {
     }
   }
 
+  // Handle manual device removal
+  const handleRemoveDevice = async (peer) => {
+    if (!peer) return
+    const peerName = peer.name || 'Device'
+
+    // 1. If currently selected, clear selection
+    if (selectedPeer?.deviceId === peer.deviceId || selectedPeer?.id === peer.id) {
+      setSelectedPeer(null)
+      setMobileTab('devices')
+    }
+
+    // 2. Disconnect pairing if paired
+    if (trustedDeviceIds.includes(peer.deviceId)) {
+      if (socket) {
+        socket.emit('pairing:disconnect', {
+          targetDeviceId: peer.deviceId,
+          targetSocketId: peer.socketId || peer.id,
+        })
+      }
+      setTrustedDeviceIds((prev) => prev.filter((id) => id !== peer.deviceId))
+    }
+
+    // 3. Remove/dismiss peer from active view
+    if (removePeer) {
+      removePeer(peer.deviceId, peer.socketId || peer.id)
+    }
+
+    showToast(`Removed ${peerName} (reappears on refresh)`, 'info')
+  }
+
   return (
     <>
       <Navbar
@@ -533,6 +563,7 @@ export default function App() {
             trustedDeviceIds={trustedDeviceIds}
             onPairRequest={handlePairRequest}
             onToggleTrust={handleToggleTrust}
+            onRemoveDevice={handleRemoveDevice}
           />
         </div>
 
@@ -548,6 +579,10 @@ export default function App() {
             onSwitchToDevices={() => setMobileTab('devices')}
             onFileDone={addToHistory}
             onTransferCompleted={loadHistory}
+            onRemoveDevice={handleRemoveDevice}
+            receiving={receiving}
+            onOpenQR={() => setQrOpen(true)}
+            history={history}
           />
         </div>
 
